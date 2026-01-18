@@ -16,7 +16,7 @@ import java.util.stream.Collectors;
  */
 class actor_iac {
 
-    private static final String VERSION = "2.12.0";
+    private static final String VERSION = "2.12.1";
 
     public static void main(String[] args) throws Exception {
         File jarFile = locateJar();

@@ -66,11 +66,11 @@ steps:
             fi
 
   - states: ["5", "end"]
-    note: Retrieve network interfaces and IP addresses
+    note: Retrieve network interfaces, IP addresses, MAC addresses, and state
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
             echo "===== NETWORK INFO ====="
-            ip -4 addr show | grep -E "(^[0-9]+:|inet )" | head -20
+            ip addr show | grep -E "(^[0-9]+:.*state|inet |ether )" | head -30

@@ -33,8 +33,8 @@ steps:
         arguments: ["./actor-iac-logs"]
 
   - states: ["4", "end"]
-    note: Summarize disk info (session ID auto-retrieved from nodeGroup)
+    note: Summarize all system info (CPU, GPU, memory, disk, network)
     actions:
       - actor: aggregator
-        method: summarize-disks
+        method: summarize-all
         arguments: []

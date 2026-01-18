@@ -1,0 +1,15 @@
+name: main-hello
+
+description: |
+  Main workflow that executes hello.yaml on all nodes in parallel.
+
+steps:
+  - states: ["0", "end"]
+    note: Execute hello.yaml on all nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["hello.yaml"]

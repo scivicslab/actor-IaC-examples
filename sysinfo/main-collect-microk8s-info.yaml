@@ -1,0 +1,16 @@
+name: main-collect-microk8s-info
+
+description: |
+  Main workflow to collect MicroK8s configuration from all compute nodes in parallel.
+  Executes collect-microk8s-info.yaml on each node.
+
+steps:
+  - states: ["0", "end"]
+    note: Execute collect-microk8s-info.yaml in parallel on all nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["collect-microk8s-info.yaml"]

@@ -1,0 +1,40 @@
+name: CollectAndAnalyze
+
+steps:
+  - states: ["0", "1"]
+    note: Collect system info on all nodes in parallel
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["collect-sysinfo.yaml"]
+
+  - states: ["1", "2"]
+    note: Load plugin JAR
+    actions:
+      - actor: loader
+        method: loadJar
+        arguments: ["plugins/actor-IaC-plugins-1.0.0.jar"]
+
+  - states: ["2", "3"]
+    note: Create aggregator as child of loader
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["loader", "aggregator", "com.scivicslab.actoriac.plugins.h2analyzer.SystemInfoAggregator"]
+
+  - states: ["3", "4"]
+    note: Connect to database
+    actions:
+      - actor: aggregator
+        method: connect
+        arguments: ["./actor-iac-logs"]
+
+  - states: ["4", "end"]
+    note: Summarize disk info (session ID auto-retrieved from nodeGroup)
+    actions:
+      - actor: aggregator
+        method: summarize-disks
+        arguments: []

@@ -1,0 +1,133 @@
+name: collect-microk8s-info
+
+description: |
+  Sub-workflow to collect MicroK8s configuration from each compute node.
+  Checks installation status, cluster state, storage, and network settings.
+
+steps:
+  - states: ["0", "1"]
+    note: Check MicroK8s installation status and version
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== MICROK8S INSTALLATION ====="
+            echo "--- snap info ---"
+            snap list microk8s 2>/dev/null || echo "microk8s not installed via snap"
+            echo ""
+            echo "--- microk8s version ---"
+            microk8s version 2>/dev/null || echo "microk8s command not found"
+            echo ""
+            echo "--- microk8s status ---"
+            microk8s status 2>/dev/null | head -30 || echo "Cannot get microk8s status"
+
+  - states: ["1", "2"]
+    note: Check Kubernetes node status
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== KUBERNETES NODES ====="
+            microk8s kubectl get nodes -o wide 2>/dev/null || echo "Cannot get nodes"
+            echo ""
+            echo "--- node details ---"
+            microk8s kubectl describe nodes 2>/dev/null | grep -E "^(Name:|Roles:|Taints:|Allocatable:|Capacity:)" | head -20 || echo "Cannot describe nodes"
+
+  - states: ["2", "3"]
+    note: Check enabled addons
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== ENABLED ADDONS ====="
+            microk8s status --format short 2>/dev/null | grep -E "^  " || echo "Cannot list addons"
+
+  - states: ["3", "4"]
+    note: Check storage classes and PVs
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== STORAGE CONFIGURATION ====="
+            echo "--- storage classes ---"
+            microk8s kubectl get storageclass 2>/dev/null || echo "No storage classes"
+            echo ""
+            echo "--- persistent volumes ---"
+            microk8s kubectl get pv 2>/dev/null || echo "No persistent volumes"
+            echo ""
+            echo "--- hostpath storage location ---"
+            ls -la /var/snap/microk8s/common/default-storage 2>/dev/null || echo "Default storage not found"
+            echo ""
+            echo "--- storage disk usage ---"
+            df -h /var/snap/microk8s 2>/dev/null || echo "Cannot check microk8s disk usage"
+
+  - states: ["4", "5"]
+    note: Check network configuration (CNI)
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== NETWORK CONFIGURATION ====="
+            echo "--- CNI plugins ---"
+            ls /var/snap/microk8s/current/args/cni-network/ 2>/dev/null || echo "CNI config not found"
+            echo ""
+            echo "--- pod CIDR ---"
+            microk8s kubectl cluster-info dump 2>/dev/null | grep -E "cluster-cidr|service-cluster-ip-range" | head -5 || echo "Cannot get CIDR info"
+            echo ""
+            echo "--- calico/flannel status ---"
+            microk8s kubectl get pods -n kube-system -l k8s-app=calico-node 2>/dev/null || \
+            microk8s kubectl get pods -n kube-system -l app=flannel 2>/dev/null || \
+            echo "No calico/flannel pods found"
+
+  - states: ["5", "6"]
+    note: Check services and Ingress status
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== SERVICES AND INGRESS ====="
+            echo "--- services (all namespaces) ---"
+            microk8s kubectl get svc -A 2>/dev/null | head -20 || echo "Cannot list services"
+            echo ""
+            echo "--- ingress controller ---"
+            microk8s kubectl get pods -n ingress -l name=nginx-ingress-microk8s 2>/dev/null || echo "No ingress controller"
+            echo ""
+            echo "--- metallb (if enabled) ---"
+            microk8s kubectl get pods -n metallb-system 2>/dev/null || echo "MetalLB not installed"
+
+  - states: ["6", "7"]
+    note: Check cluster membership (multi-node)
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== CLUSTER MEMBERSHIP ====="
+            echo "--- cluster nodes ---"
+            microk8s kubectl get nodes 2>/dev/null || echo "Cannot get cluster nodes"
+            echo ""
+            echo "--- join token (if master) ---"
+            microk8s add-node 2>/dev/null | head -5 || echo "Not a master node or cannot generate token"
+
+  - states: ["7", "end"]
+    note: Check resource usage
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== RESOURCE USAGE ====="
+            echo "--- running pods ---"
+            microk8s kubectl get pods -A 2>/dev/null | wc -l || echo "Cannot count pods"
+            echo ""
+            echo "--- resource requests ---"
+            microk8s kubectl describe nodes 2>/dev/null | grep -A5 "Allocated resources:" | head -10 || echo "Cannot get resource info"
+            echo ""
+            echo "--- microk8s processes ---"
+            ps aux | grep -E "(kubelet|apiserver|containerd)" | grep -v grep | wc -l || echo "0"

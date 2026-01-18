@@ -1,0 +1,34 @@
+name: test-plugin-load
+
+description: |
+  Test workflow to verify plugin loading mechanism.
+  Loads SystemInfoAggregator plugin and lists sessions from the log database.
+
+steps:
+  - states: ["0", "1"]
+    note: Load plugin JAR
+    actions:
+      - actor: loader
+        method: loadJar
+        arguments: ["plugins/actor-IaC-plugins-1.0.0.jar"]
+
+  - states: ["1", "2"]
+    note: Create aggregator as child of loader
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["loader", "aggregator", "com.scivicslab.actoriac.plugins.h2analyzer.SystemInfoAggregator"]
+
+  - states: ["2", "3"]
+    note: Connect to log database
+    actions:
+      - actor: aggregator
+        method: connect
+        arguments: ["./actor-iac-logs"]
+
+  - states: ["3", "end"]
+    note: List sessions
+    actions:
+      - actor: aggregator
+        method: list-sessions
+        arguments: []

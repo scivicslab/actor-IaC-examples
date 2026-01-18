@@ -1,0 +1,16 @@
+name: main-collect-sysinfo
+
+description: |
+  Main workflow to collect system information from all compute nodes in parallel.
+  Executes collect-sysinfo.yaml on each node.
+
+steps:
+  - states: ["0", "end"]
+    note: Execute collect-sysinfo.yaml in parallel on all nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["collect-sysinfo.yaml"]

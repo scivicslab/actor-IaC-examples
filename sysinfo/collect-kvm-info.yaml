@@ -1,0 +1,117 @@
+name: collect-kvm-info
+
+description: |
+  Sub-workflow to collect KVM virtualization configuration from each compute node.
+  Checks virtualization support, libvirt settings, storage pools, and bridge networks.
+
+steps:
+  - states: ["0", "1"]
+    note: Check CPU virtualization support (VT-x/AMD-V)
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== VIRTUALIZATION SUPPORT ====="
+            echo "--- CPU flags ---"
+            grep -E "(vmx|svm)" /proc/cpuinfo | head -1 || echo "No virtualization flags found"
+            echo ""
+            echo "--- KVM modules ---"
+            lsmod | grep -E "^kvm" || echo "KVM modules not loaded"
+            echo ""
+            echo "--- /dev/kvm ---"
+            ls -la /dev/kvm 2>/dev/null || echo "/dev/kvm not found"
+
+  - states: ["1", "2"]
+    note: Check libvirt and QEMU/KVM installation status
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== LIBVIRT STATUS ====="
+            echo "--- libvirtd service ---"
+            systemctl is-active libvirtd 2>/dev/null || echo "libvirtd not running or not installed"
+            echo ""
+            echo "--- virsh version ---"
+            virsh --version 2>/dev/null || echo "virsh not installed"
+            echo ""
+            echo "--- qemu-system ---"
+            which qemu-system-x86_64 2>/dev/null || which qemu-system-aarch64 2>/dev/null || echo "QEMU not found"
+
+  - states: ["2", "3"]
+    note: Check libvirt storage pools
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== STORAGE POOLS ====="
+            virsh pool-list --all 2>/dev/null || echo "Cannot list storage pools (libvirt not available)"
+            echo ""
+            echo "--- Default pool info ---"
+            virsh pool-info default 2>/dev/null || echo "No default pool"
+            echo ""
+            echo "--- Pool paths ---"
+            virsh pool-dumpxml default 2>/dev/null | grep -E "<path>" || echo "No default pool path"
+
+  - states: ["3", "4"]
+    note: Check disk space for VM images
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== VM IMAGE STORAGE ====="
+            echo "--- /var/lib/libvirt/images ---"
+            df -h /var/lib/libvirt/images 2>/dev/null || echo "/var/lib/libvirt/images not mounted"
+            ls -la /var/lib/libvirt/images 2>/dev/null | head -10 || echo "Directory not accessible"
+            echo ""
+            echo "--- /data1 (if exists) ---"
+            df -h /data1 2>/dev/null || echo "/data1 not mounted"
+            echo ""
+            echo "--- Large partitions (>100GB, >50% free) ---"
+            df -h | awk 'NR>1 && $4 ~ /[0-9]+[GT]/ {print}'
+
+  - states: ["4", "5"]
+    note: Check bridge interfaces
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== BRIDGE INTERFACES ====="
+            echo "--- bridge devices ---"
+            ip link show type bridge 2>/dev/null || echo "No bridge devices"
+            echo ""
+            echo "--- br0 details ---"
+            ip addr show br0 2>/dev/null || echo "br0 not found"
+            echo ""
+            echo "--- bridge members ---"
+            bridge link 2>/dev/null | head -10 || echo "bridge command not available"
+
+  - states: ["5", "6"]
+    note: Check libvirt networks
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== LIBVIRT NETWORKS ====="
+            virsh net-list --all 2>/dev/null || echo "Cannot list networks"
+            echo ""
+            echo "--- default network ---"
+            virsh net-info default 2>/dev/null || echo "No default network"
+            echo ""
+            echo "--- virbr0 ---"
+            ip addr show virbr0 2>/dev/null || echo "virbr0 not found"
+
+  - states: ["6", "end"]
+    note: Check existing VMs
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== EXISTING VMS ====="
+            virsh list --all 2>/dev/null || echo "Cannot list VMs"

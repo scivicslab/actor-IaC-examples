@@ -1,0 +1,16 @@
+name: main-collect-kvm-info
+
+description: |
+  Main workflow to collect KVM virtualization configuration from all compute nodes in parallel.
+  Executes collect-kvm-info.yaml on each node.
+
+steps:
+  - states: ["0", "end"]
+    note: Execute collect-kvm-info.yaml in parallel on all nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["collect-kvm-info.yaml"]

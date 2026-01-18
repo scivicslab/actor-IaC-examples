@@ -1,0 +1,13 @@
+name: hello
+
+description: |
+  Simple sub-workflow that prints a greeting message.
+
+steps:
+  - states: ["0", "end"]
+    note: Print hello message
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - "echo 'Hello from actor-IaC!'"

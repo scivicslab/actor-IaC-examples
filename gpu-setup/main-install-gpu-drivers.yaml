@@ -2,6 +2,7 @@ name: main-install-gpu-drivers
 
 description: |
   Idempotent workflow to install GPU drivers on all compute nodes.
+  - Checks for hung apt processes first - skips affected nodes
   - NVIDIA nodes: installs nvidia-driver-535 (if not already installed)
   - AMD nodes: installs ROCm 6.0 (if not already installed)
   - Already installed: does nothing (no upgrade)
@@ -11,6 +12,13 @@ description: |
 
 steps:
   - states: ["0", "1"]
+    note: Load WorkflowReporter
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
+
+  - states: ["1", "2"]
     note: Install NVIDIA drivers (idempotent)
     actions:
       - actor: nodeGroup
@@ -20,7 +28,7 @@ steps:
           method: runWorkflow
           arguments: ["gpu-setup/install-nvidia-driver.yaml"]
 
-  - states: ["1", "end"]
+  - states: ["2", "3"]
     note: Install ROCm (idempotent)
     actions:
       - actor: nodeGroup
@@ -29,3 +37,15 @@ steps:
           actor: "node-*"
           method: runWorkflow
           arguments: ["gpu-setup/install-rocm.yaml"]
+
+  - states: ["3", "end"]
+    note: Generate report
+    actions:
+      - actor: workflowReporter
+        method: report
+
+  - states: ["!end", "end"]
+    note: Generate report even on error
+    actions:
+      - actor: workflowReporter
+        method: report

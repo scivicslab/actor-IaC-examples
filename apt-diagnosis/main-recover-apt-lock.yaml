@@ -1,0 +1,22 @@
+name: main-recover-apt-lock
+
+description: |
+  Recovery workflow for hung apt processes.
+  Use with -t option to target specific nodes.
+
+  Safety checks before killing:
+    1. Process must be running >= 1 hour
+    2. Process must be unattended-upgrade or apt.systemd.daily
+
+  Requires: export SUDO_PASSWORD="your-password" before running.
+
+steps:
+  - states: ["0", "end"]
+    note: Recover apt lock on target nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["apt-diagnosis/recover-apt-lock.yaml"]

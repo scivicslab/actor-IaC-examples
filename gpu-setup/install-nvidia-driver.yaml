@@ -2,106 +2,205 @@ name: install-nvidia-driver
 
 description: |
   Idempotent workflow to install NVIDIA driver on a node.
+  - Uses Java plugin for reliable hung apt detection - skips if found
   - If nvidia-smi is already available, does nothing (no upgrade)
   - If not installed, installs nvidia-driver-535
   Requires: export SUDO_PASSWORD="your-password" before running.
 
 steps:
   - states: ["0", "1"]
+    note: Load plugin JAR
+    actions:
+      - actor: loader
+        method: loadJar
+        arguments: ["../actor-IaC-plugins/target/actor-IaC-plugins-1.0.0.jar"]
+
+  - states: ["1", "2"]
+    note: Load AptLockChecker plugin
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["this", "aptChecker", "com.scivicslab.actoriac.plugins.aptcheck.AptLockChecker"]
+
+  - states: ["2", "3"]
+    note: Get hostname
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments: ["hostname -s"]
+
+  - states: ["3", "4"]
+    note: Store hostname
+    actions:
+      - actor: this
+        method: putJson
+        arguments:
+          path: hostname
+          value: "${result}"
+
+  - states: ["4", "5"]
+    note: Get process list
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments: ["ps -eo pid,etimes,args 2>/dev/null"]
+
+  - states: ["5", "6"]
+    note: Check for hung apt processes
+    actions:
+      - actor: aptChecker
+        method: check
+        arguments:
+          psOutput: "${result}"
+          hostname: "${json.hostname}"
+
+  - states: ["6", "7"]
+    note: Store hung status and skip if hung
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            RESULT='${result}'
+            if echo "$RESULT" | grep -q "^HUNG:"; then
+                echo "SKIP_REASON=APT_HUNG"
+            else
+                echo "SKIP_REASON=none"
+            fi
+
+  - states: ["7", "8"]
+    note: Store skip reason
+    actions:
+      - actor: this
+        method: putJson
+        arguments:
+          path: skipReason
+          value: "${result}"
+
+  - states: ["8", "9"]
     note: Check if nvidia-smi is already installed
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
+            HOSTNAME=$(hostname -s)
+            SKIP='${json.skipReason}'
+
+            # Skip if apt hung was detected
+            if echo "$SKIP" | grep -q "APT_HUNG"; then
+                exit 0
+            fi
+
             if command -v nvidia-smi &> /dev/null; then
                 echo "NVIDIA_DRIVER_INSTALLED=true"
-                echo "Current driver:"
-                nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || echo "unknown"
-            else
-                echo "NVIDIA_DRIVER_INSTALLED=false"
-                echo "Checking for NVIDIA GPU..."
-                lspci | grep -i nvidia || echo "No NVIDIA GPU found"
-            fi
-
-  - states: ["1", "2"]
-    note: Skip if already installed, otherwise wait for apt lock
-    actions:
-      - actor: this
-        method: executeCommand
-        arguments:
-          - |
-            if command -v nvidia-smi &> /dev/null; then
-                echo "SKIP: nvidia-smi already installed, no action needed"
+                VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || echo "unknown")
+                echo "%$HOSTNAME: [OK] nvidia-smi already installed (driver $VERSION)"
+                echo "SKIP_REASON=ALREADY_INSTALLED"
                 exit 0
             fi
+
             # Check if this node has NVIDIA GPU
             if ! lspci | grep -qi nvidia; then
-                echo "SKIP: No NVIDIA GPU detected"
+                echo "NVIDIA_DRIVER_INSTALLED=n/a"
+                echo "%$HOSTNAME: [SKIP] No NVIDIA GPU"
+                echo "SKIP_REASON=NO_GPU"
                 exit 0
             fi
-            echo "NVIDIA GPU found, will install driver"
 
-  - states: ["2", "3"]
-    note: Wait for apt lock and add PPA (skip if already installed)
+            echo "NVIDIA GPU found, will install driver"
+            echo "SKIP_REASON=none"
+
+  - states: ["9", "10"]
+    note: Update skip reason
+    actions:
+      - actor: this
+        method: putJson
+        arguments:
+          path: skipReason
+          value: "${result}"
+
+  - states: ["10", "11"]
+    note: Wait for apt lock and add PPA
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            if command -v nvidia-smi &> /dev/null; then
-                echo "SKIP"
+            HOSTNAME=$(hostname -s)
+            SKIP='${json.skipReason}'
+
+            # Skip if any skip reason was set
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
                 exit 0
             fi
-            if ! lspci | grep -qi nvidia; then
-                echo "SKIP"
-                exit 0
-            fi
-            # Wait for apt lock
+
+            # Wait for apt lock (max 5 min)
+            TIMEOUT=300
+            ELAPSED=0
             while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-                echo "Waiting for apt lock..."
-                sleep 5
+                if [ $ELAPSED -ge $TIMEOUT ]; then
+                    echo "TIMEOUT waiting for apt lock"
+                    echo "%$HOSTNAME: [FAIL] apt lock timeout"
+                    exit 1
+                fi
+                echo "Waiting for apt lock... (${ELAPSED}s)"
+                sleep 10
+                ELAPSED=$((ELAPSED + 10))
             done
+
             add-apt-repository ppa:graphics-drivers/ppa -y && apt update
 
-  - states: ["3", "4"]
-    note: Install NVIDIA driver (skip if already installed)
+  - states: ["11", "12"]
+    note: Install NVIDIA driver
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            if command -v nvidia-smi &> /dev/null; then
-                echo "SKIP"
+            HOSTNAME=$(hostname -s)
+            SKIP='${json.skipReason}'
+
+            # Skip if any skip reason was set
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
                 exit 0
             fi
-            if ! lspci | grep -qi nvidia; then
-                echo "SKIP"
-                exit 0
-            fi
-            # Wait for apt lock
+
+            # Wait for apt lock (max 5 min)
+            TIMEOUT=300
+            ELAPSED=0
             while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-                echo "Waiting for apt lock..."
-                sleep 5
+                if [ $ELAPSED -ge $TIMEOUT ]; then
+                    echo "TIMEOUT waiting for apt lock"
+                    exit 1
+                fi
+                echo "Waiting for apt lock... (${ELAPSED}s)"
+                sleep 10
+                ELAPSED=$((ELAPSED + 10))
             done
+
             apt install -y nvidia-driver-535
 
-  - states: ["4", "end"]
+  - states: ["12", "end"]
     note: Verification
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
-            echo "===== RESULT ====="
+            HOSTNAME=$(hostname -s)
+            SKIP='${json.skipReason}'
+
+            # Skip verification if skipped earlier
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+                exit 0
+            fi
+
             if command -v nvidia-smi &> /dev/null; then
-                echo "nvidia-smi: installed"
-                nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null
+                VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || echo "unknown")
+                echo "%$HOSTNAME: [INSTALLED] nvidia-driver (driver $VERSION)"
             else
                 if lspci | grep -qi nvidia; then
-                    echo "nvidia-smi: not yet available (reboot required)"
-                    dpkg -l | grep nvidia-driver || echo "Driver package not found"
-                else
-                    echo "No NVIDIA GPU on this node"
+                    echo "%$HOSTNAME: [PENDING] reboot required"
                 fi
             fi

@@ -1,0 +1,36 @@
+name: main-detect-apt-lock
+
+description: |
+  Detect apt lock status on all compute nodes.
+  Read-only - does not modify anything.
+  No SUDO_PASSWORD required.
+
+steps:
+  - states: ["0", "1"]
+    note: Load WorkflowReporter
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
+
+  - states: ["1", "2"]
+    note: Detect apt lock status on all nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["apt-diagnosis/detect-apt-lock.yaml"]
+
+  - states: ["2", "end"]
+    note: Generate report
+    actions:
+      - actor: workflowReporter
+        method: report
+
+  - states: ["!end", "end"]
+    note: Generate report even on error
+    actions:
+      - actor: workflowReporter
+        method: report

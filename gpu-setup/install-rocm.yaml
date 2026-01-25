@@ -2,129 +2,140 @@ name: install-rocm
 
 description: |
   Idempotent workflow to install ROCm on AMD GPU nodes.
+  - Checks for hung apt processes first - skips if found
   - If rocm-smi is already available, does nothing (no upgrade)
   - If not installed, installs ROCm 6.0
   Requires: export SUDO_PASSWORD="your-password" before running.
 
 steps:
   - states: ["0", "1"]
+    note: Check for hung apt processes
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            HOSTNAME=$(hostname -s)
+            HUNG_THRESHOLD=3600
+
+            # Check for hung apt processes
+            HUNG_PIDS=$(ps -eo pid,etimes,args 2>/dev/null | grep -E "/usr/lib/apt/apt.systemd.daily|/usr/bin/unattended-upgrade " | grep -v grep | awk -v th=$HUNG_THRESHOLD '$2 >= th {print $1}')
+
+            if [ -n "$HUNG_PIDS" ]; then
+                FIRST_PID=$(echo "$HUNG_PIDS" | head -1)
+                ETIME=$(ps -p "$FIRST_PID" -o etimes= 2>/dev/null)
+                if [ "$ETIME" -ge 86400 ] 2>/dev/null; then
+                    AGE="$((ETIME / 86400))d"
+                else
+                    AGE="$((ETIME / 3600))h"
+                fi
+                echo "APT_HUNG: yes"
+                echo "%$HOSTNAME: [SKIP] APT_HUNG ($AGE) - ROCm"
+                exit 0
+            fi
+
+            echo "APT_HUNG: no"
+
+  - states: ["1", "2"]
     note: Check if rocm-smi is already installed
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
+            HOSTNAME=$(hostname -s)
+
             if command -v rocm-smi &> /dev/null; then
-                echo "ROCM_INSTALLED=true"
-                echo "Current ROCm version:"
-                cat /opt/rocm/.info/version 2>/dev/null || echo "unknown"
-            else
-                echo "ROCM_INSTALLED=false"
-                echo "Checking for AMD GPU..."
-                lspci | grep -iE "amd.*(vga|display|3d)" || echo "No AMD GPU found"
+                VERSION=$(cat /opt/rocm/.info/version 2>/dev/null || echo "unknown")
+                echo "%$HOSTNAME: [OK] rocm-smi already installed (ROCm $VERSION)"
+                exit 0
             fi
 
-  - states: ["1", "2"]
-    note: Skip if already installed or no AMD GPU
-    actions:
-      - actor: this
-        method: executeCommand
-        arguments:
-          - |
-            if command -v rocm-smi &> /dev/null; then
-                echo "SKIP: rocm-smi already installed, no action needed"
-                exit 0
-            fi
             if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
-                echo "SKIP: No AMD GPU detected"
+                echo "%$HOSTNAME: [SKIP] No AMD GPU"
                 exit 0
             fi
+
             echo "AMD GPU found, will install ROCm"
 
   - states: ["2", "3"]
-    note: Install prerequisites (skip if already installed)
+    note: Install prerequisites
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            if command -v rocm-smi &> /dev/null; then
-                echo "SKIP"
-                exit 0
-            fi
-            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
-                echo "SKIP"
-                exit 0
-            fi
-            # Wait for apt lock
+            if command -v rocm-smi &> /dev/null; then exit 0; fi
+            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then exit 0; fi
+
+            # Wait for apt lock (max 5 min)
+            TIMEOUT=300
+            ELAPSED=0
             while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-                echo "Waiting for apt lock..."
-                sleep 5
+                if [ $ELAPSED -ge $TIMEOUT ]; then
+                    echo "TIMEOUT waiting for apt lock"
+                    exit 1
+                fi
+                echo "Waiting for apt lock... (${ELAPSED}s)"
+                sleep 10
+                ELAPSED=$((ELAPSED + 10))
             done
+
             apt install -y wget gnupg2
 
   - states: ["3", "4"]
-    note: Download amdgpu-install package (skip if already installed)
+    note: Download amdgpu-install package
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
-            if command -v rocm-smi &> /dev/null; then
-                echo "SKIP"
-                exit 0
-            fi
-            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
-                echo "SKIP"
-                exit 0
-            fi
+            if command -v rocm-smi &> /dev/null; then exit 0; fi
+            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then exit 0; fi
+
             cd /tmp
             . /etc/os-release
             UBUNTU_CODENAME=${VERSION_CODENAME:-jammy}
-            echo "Ubuntu codename: $UBUNTU_CODENAME"
             ROCM_VERSION="6.0"
             wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/${UBUNTU_CODENAME}/amdgpu-install_6.0.60000-1_all.deb -O amdgpu-install.deb || \
             wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/jammy/amdgpu-install_6.0.60000-1_all.deb -O amdgpu-install.deb
             echo "Download complete"
 
   - states: ["4", "5"]
-    note: Install amdgpu-install and ROCm (skip if already installed)
+    note: Install amdgpu-install and ROCm
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            if command -v rocm-smi &> /dev/null; then
-                echo "SKIP"
-                exit 0
-            fi
-            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
-                echo "SKIP"
-                exit 0
-            fi
-            # Wait for apt lock
+            if command -v rocm-smi &> /dev/null; then exit 0; fi
+            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then exit 0; fi
+
+            # Wait for apt lock (max 5 min)
+            TIMEOUT=300
+            ELAPSED=0
             while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-                echo "Waiting for apt lock..."
-                sleep 5
+                if [ $ELAPSED -ge $TIMEOUT ]; then
+                    echo "TIMEOUT waiting for apt lock"
+                    exit 1
+                fi
+                echo "Waiting for apt lock... (${ELAPSED}s)"
+                sleep 10
+                ELAPSED=$((ELAPSED + 10))
             done
+
             dpkg -i /tmp/amdgpu-install.deb && apt update
             amdgpu-install -y --usecase=rocm --no-dkms
 
   - states: ["5", "6"]
-    note: Add user to render and video groups (skip if already installed)
+    note: Add user to render and video groups
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            if command -v rocm-smi &> /dev/null; then
-                echo "SKIP"
-                exit 0
-            fi
-            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
-                echo "SKIP"
-                exit 0
-            fi
+            if command -v rocm-smi &> /dev/null; then exit 0; fi
+            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then exit 0; fi
             usermod -aG render,video devteam
 
   - states: ["6", "end"]
@@ -134,15 +145,13 @@ steps:
         method: executeCommand
         arguments:
           - |
-            echo "===== RESULT ====="
+            HOSTNAME=$(hostname -s)
+
             if command -v rocm-smi &> /dev/null; then
-                echo "rocm-smi: installed"
-                cat /opt/rocm/.info/version 2>/dev/null || echo "version unknown"
+                VERSION=$(cat /opt/rocm/.info/version 2>/dev/null || echo "unknown")
+                echo "%$HOSTNAME: [INSTALLED] ROCm $VERSION"
             else
                 if lspci | grep -qiE "amd.*(vga|display|3d)"; then
-                    echo "rocm-smi: not yet available (reboot required)"
-                    dpkg -l | grep rocm | head -5 || echo "ROCm packages not found"
-                else
-                    echo "No AMD GPU on this node"
+                    echo "%$HOSTNAME: [PENDING] ROCm reboot required"
                 fi
             fi

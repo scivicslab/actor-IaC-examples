@@ -1,71 +1,78 @@
 name: detect-apt-lock
 
 description: |
-  Read-only workflow to detect apt lock status on all nodes.
-  Does not modify anything - safe to run anytime.
-  No SUDO_PASSWORD required.
-
-  Output states:
-    - UNLOCKED: apt is available
-    - LOCKED_NORMAL: apt is busy but running normally (< 1 hour)
-    - LOCKED_HUNG: apt appears hung (>= 1 hour)
+  Read-only workflow to detect apt lock status using Java plugin.
+  Checks for hung apt processes (running > 1 hour).
 
 steps:
-  - states: ["0", "end"]
-    note: Detect apt lock status on each node
+  - states: ["0", "1"]
+    note: Load plugin JAR
+    actions:
+      - actor: loader
+        method: loadJar
+        arguments: ["../actor-IaC-plugins/target/actor-IaC-plugins-1.0.0.jar"]
+
+  - states: ["1", "2"]
+    note: Load AptLockChecker plugin
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["this", "aptChecker", "com.scivicslab.actoriac.plugins.aptcheck.AptLockChecker"]
+
+  - states: ["2", "3"]
+    note: Get hostname
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments: ["hostname -s"]
+
+  - states: ["3", "4"]
+    note: Store hostname
+    actions:
+      - actor: this
+        method: putJson
+        arguments:
+          path: hostname
+          value: "${result}"
+
+  - states: ["4", "5"]
+    note: Get process list
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments: ["ps -eo pid,etimes,args 2>/dev/null"]
+
+  - states: ["5", "6"]
+    note: Check for hung apt processes
+    actions:
+      - actor: aptChecker
+        method: check
+        arguments:
+          psOutput: "${result}"
+          hostname: "${json.hostname}"
+
+  - states: ["6", "7"]
+    note: Store check result
+    actions:
+      - actor: this
+        method: putJson
+        arguments:
+          path: checkResult
+          value: "${result}"
+
+  - states: ["7", "end"]
+    note: Output result for WorkflowReporter (via SSH for log capture)
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
-            LOCK_FILE="/var/lib/dpkg/lock-frontend"
-            HUNG_THRESHOLD=3600  # 1 hour in seconds
-
-            # Get PID holding the lock
-            LOCK_PID=$(fuser "$LOCK_FILE" 2>/dev/null | awk '{print $1}')
-
-            if [ -z "$LOCK_PID" ]; then
-                echo "APT_LOCK: UNLOCKED"
-                exit 0
-            fi
-
-            # Get process information
-            LOCK_CMD=$(ps -p "$LOCK_PID" -o args= 2>/dev/null)
-            START_TIME=$(ps -p "$LOCK_PID" -o lstart= 2>/dev/null)
-
-            if [ -z "$START_TIME" ]; then
-                echo "APT_LOCK: LOCKED_UNKNOWN"
-                echo "  PID: $LOCK_PID"
-                echo "  CMD: $LOCK_CMD"
-                echo "  AGE: unknown (cannot determine start time)"
-                exit 0
-            fi
-
-            # Calculate age in seconds
-            START_EPOCH=$(date -d "$START_TIME" +%s 2>/dev/null)
-            NOW_EPOCH=$(date +%s)
-            AGE_SECONDS=$((NOW_EPOCH - START_EPOCH))
-
-            # Human-readable age
-            if [ $AGE_SECONDS -ge 86400 ]; then
-                AGE_HUMAN="$((AGE_SECONDS / 86400)) days"
-            elif [ $AGE_SECONDS -ge 3600 ]; then
-                AGE_HUMAN="$((AGE_SECONDS / 3600)) hours"
+            HOSTNAME='${json.hostname}'
+            RESULT='${json.checkResult}'
+            if echo "$RESULT" | grep -q "^HUNG:"; then
+                PID=$(echo "$RESULT" | cut -d: -f2)
+                AGE=$(echo "$RESULT" | cut -d: -f3)
+                echo "%$HOSTNAME: [CRITICAL] HUNG ($AGE) PID=$PID"
             else
-                AGE_HUMAN="$((AGE_SECONDS / 60)) minutes"
-            fi
-
-            # Determine status
-            if [ $AGE_SECONDS -ge $HUNG_THRESHOLD ]; then
-                echo "APT_LOCK: LOCKED_HUNG"
-                echo "  PID: $LOCK_PID"
-                echo "  CMD: $LOCK_CMD"
-                echo "  AGE: $AGE_HUMAN"
-                echo "  ACTION_REQUIRED: Yes - process appears hung"
-            else
-                echo "APT_LOCK: LOCKED_NORMAL"
-                echo "  PID: $LOCK_PID"
-                echo "  CMD: $LOCK_CMD"
-                echo "  AGE: $AGE_HUMAN"
-                echo "  ACTION_REQUIRED: No - wait for completion"
+                echo "%$HOSTNAME: [OK] UNLOCKED"
             fi

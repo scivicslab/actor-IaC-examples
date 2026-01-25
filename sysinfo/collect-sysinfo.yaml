@@ -52,7 +52,7 @@ steps:
             df -h | grep -E "^(/dev|Filesystem)"
 
   - states: ["4", "5"]
-    note: Retrieve GPU presence and detailed info (uses nvidia-smi for NVIDIA GPUs)
+    note: Retrieve GPU presence and detailed info (NVIDIA and AMD)
     actions:
       - actor: this
         method: executeCommand
@@ -60,12 +60,27 @@ steps:
           - |
             echo "===== GPU INFO ====="
             if command -v nvidia-smi &> /dev/null; then
-                # Get GPU details: name, vram, driver, compute capability
+                # NVIDIA GPU: name, vram, driver, compute capability
                 nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap --format=csv,noheader 2>/dev/null || echo "nvidia-smi query failed"
-                # Get CUDA version from nvidia-smi header
                 echo "CUDA_VERSION: $(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9.]+' || echo 'N/A')"
+            elif command -v rocm-smi &> /dev/null; then
+                # AMD GPU with ROCm
+                echo "AMD_GPU: true"
+                # Get GPU name and VRAM
+                rocm-smi --showproductname 2>/dev/null | grep -E "Card series:" | head -1 | sed 's/.*Card series:\s*/GPU_NAME: /'
+                rocm-smi --showmeminfo vram 2>/dev/null | grep -E "Total Memory" | head -1 | sed 's/.*Total Memory (B):\s*/VRAM_BYTES: /'
+                # Get driver version
+                rocm-smi --showdriverversion 2>/dev/null | grep -E "Driver version:" | head -1 | sed 's/.*Driver version:\s*/DRIVER_VERSION: /'
+                # Get ROCm version
+                if [ -f /opt/rocm/.info/version ]; then
+                    echo "ROCM_VERSION: $(cat /opt/rocm/.info/version)"
+                elif command -v rocminfo &> /dev/null; then
+                    echo "ROCM_VERSION: $(rocminfo 2>/dev/null | grep -oP 'ROCm Runtime Version:\s*\K[0-9.]+' || echo 'N/A')"
+                fi
+                # Get gfx architecture (similar to compute capability)
+                rocminfo 2>/dev/null | grep -E "^\s*Name:\s*gfx" | head -1 | sed 's/.*Name:\s*/GFX_ARCH: /'
             else
-                # Fallback for non-NVIDIA GPUs
+                # Fallback: lspci for GPU detection
                 lspci 2>/dev/null | grep -i -E "(vga|3d|display)" || echo "No GPU detected via lspci"
             fi
 

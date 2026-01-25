@@ -3,6 +3,7 @@ name: install-nvidia-driver
 description: |
   Sub-workflow to install NVIDIA driver on a node.
   Includes nvidia-smi for GPU monitoring.
+  Requires: export SUDO_PASSWORD="your-password" before running.
 
 steps:
   - states: ["0", "1"]
@@ -24,12 +25,9 @@ steps:
     note: Add graphics-drivers PPA and update
     actions:
       - actor: this
-        method: executeCommand
+        method: executeSudoCommand
         arguments:
-          - |
-            echo "===== ADDING PPA ====="
-            sudo add-apt-repository ppa:graphics-drivers/ppa -y
-            sudo apt update
+          - "add-apt-repository ppa:graphics-drivers/ppa -y && apt update"
 
   - states: ["2", "3"]
     note: Check recommended driver
@@ -45,12 +43,9 @@ steps:
     note: Install NVIDIA driver 535
     actions:
       - actor: this
-        method: executeCommand
+        method: executeSudoCommand
         arguments:
-          - |
-            echo "===== INSTALLING NVIDIA DRIVER ====="
-            sudo apt install -y nvidia-driver-535
-            echo "Installation complete. Reboot required."
+          - "apt install -y nvidia-driver-535"
 
   - states: ["4", "end"]
     note: Verify installation (before reboot)

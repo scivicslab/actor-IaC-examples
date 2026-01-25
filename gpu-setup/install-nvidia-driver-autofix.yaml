@@ -1,0 +1,233 @@
+name: install-nvidia-driver-autofix
+
+description: |
+  NVIDIA driver installation with automatic apt lock recovery.
+
+  Features:
+    - Idempotent: skips if nvidia-smi already installed
+    - Auto-recovery: kills hung apt processes (>= 1 hour, known types only)
+    - Reports: structured output for post-processing
+
+  Requires: export SUDO_PASSWORD="your-password" before running.
+
+steps:
+  - states: ["0", "1"]
+    note: Check if installation needed
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            # Check if already installed
+            if command -v nvidia-smi &> /dev/null; then
+                echo "NVIDIA_INSTALL: SKIP_ALREADY_INSTALLED"
+                echo "NVIDIA_DRIVER_VERSION: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"
+                exit 0
+            fi
+
+            # Check if NVIDIA GPU exists
+            if ! lspci | grep -qi nvidia; then
+                echo "NVIDIA_INSTALL: SKIP_NO_GPU"
+                exit 0
+            fi
+
+            echo "NVIDIA_INSTALL: NEEDED"
+            echo "NVIDIA_GPU: $(lspci | grep -i nvidia | head -1)"
+
+  - states: ["1", "2"]
+    note: Add PPA with auto-recovery apt lock handling
+    actions:
+      - actor: this
+        method: executeSudoCommand
+        arguments:
+          - |
+            # Skip if already installed or no GPU
+            if command -v nvidia-smi &> /dev/null; then
+                echo "SKIP"
+                exit 0
+            fi
+            if ! lspci | grep -qi nvidia; then
+                echo "SKIP"
+                exit 0
+            fi
+
+            # === apt lock check with timeout and auto-recovery ===
+            LOCK_FILE="/var/lib/dpkg/lock-frontend"
+            WAIT_TIMEOUT=300      # 5 minutes
+            HUNG_THRESHOLD=3600   # 1 hour
+
+            wait_for_apt_lock() {
+                local elapsed=0
+                while fuser "$LOCK_FILE" >/dev/null 2>&1; do
+                    if [ $elapsed -ge $WAIT_TIMEOUT ]; then
+                        return 1
+                    fi
+                    echo "Waiting for apt lock... (${elapsed}s)"
+                    sleep 10
+                    elapsed=$((elapsed + 10))
+                done
+                return 0
+            }
+
+            attempt_auto_recovery() {
+                local lock_pid=$(fuser "$LOCK_FILE" 2>/dev/null | awk '{print $1}')
+                local lock_cmd=$(ps -p "$lock_pid" -o args= 2>/dev/null)
+                local start_time=$(ps -p "$lock_pid" -o lstart= 2>/dev/null)
+                local start_epoch=$(date -d "$start_time" +%s 2>/dev/null)
+                local now_epoch=$(date +%s)
+                local age_seconds=$((now_epoch - start_epoch))
+
+                echo "APT_LOCK_PID: $lock_pid"
+                echo "APT_LOCK_CMD: $lock_cmd"
+                echo "APT_LOCK_AGE: $age_seconds seconds"
+
+                # Safety check: age >= 1 hour
+                if [ $age_seconds -lt $HUNG_THRESHOLD ]; then
+                    echo "AUTO_RECOVERY: INELIGIBLE - process running < 1 hour"
+                    return 1
+                fi
+
+                # Safety check: known automated process
+                if ! echo "$lock_cmd" | grep -qE "(unattended-upgrade|apt.systemd.daily)"; then
+                    echo "AUTO_RECOVERY: INELIGIBLE - unknown process type"
+                    return 1
+                fi
+
+                echo "AUTO_RECOVERY: ELIGIBLE - killing hung process"
+                kill -9 "$lock_pid" 2>/dev/null
+                pkill -9 -f "apt.systemd.daily" 2>/dev/null || true
+                pkill -9 -f "unattended-upgrade" 2>/dev/null || true
+                sleep 3
+
+                if fuser "$LOCK_FILE" >/dev/null 2>&1; then
+                    echo "AUTO_RECOVERY: FAILED - lock still held"
+                    return 1
+                fi
+
+                echo "AUTO_RECOVERY: SUCCESS - lock released"
+                return 0
+            }
+
+            # Main logic
+            if ! wait_for_apt_lock; then
+                echo "APT_LOCK_TIMEOUT: Attempting auto-recovery"
+                if ! attempt_auto_recovery; then
+                    echo "APT_LOCK_REPORT: SKIPPED"
+                    echo "APT_LOCK_RECOMMENDATION: Run recovery workflow manually"
+                    exit 0
+                fi
+                echo "APT_LOCK_REPORT: AUTO_RECOVERED"
+            fi
+
+            # Add PPA
+            add-apt-repository ppa:graphics-drivers/ppa -y && apt update
+            echo "PPA_ADDED: SUCCESS"
+
+  - states: ["2", "3"]
+    note: Install NVIDIA driver with auto-recovery apt lock handling
+    actions:
+      - actor: this
+        method: executeSudoCommand
+        arguments:
+          - |
+            # Skip if already installed or no GPU
+            if command -v nvidia-smi &> /dev/null; then
+                echo "SKIP"
+                exit 0
+            fi
+            if ! lspci | grep -qi nvidia; then
+                echo "SKIP"
+                exit 0
+            fi
+
+            # === apt lock check with timeout and auto-recovery ===
+            LOCK_FILE="/var/lib/dpkg/lock-frontend"
+            WAIT_TIMEOUT=300
+            HUNG_THRESHOLD=3600
+
+            wait_for_apt_lock() {
+                local elapsed=0
+                while fuser "$LOCK_FILE" >/dev/null 2>&1; do
+                    if [ $elapsed -ge $WAIT_TIMEOUT ]; then
+                        return 1
+                    fi
+                    echo "Waiting for apt lock... (${elapsed}s)"
+                    sleep 10
+                    elapsed=$((elapsed + 10))
+                done
+                return 0
+            }
+
+            attempt_auto_recovery() {
+                local lock_pid=$(fuser "$LOCK_FILE" 2>/dev/null | awk '{print $1}')
+                local lock_cmd=$(ps -p "$lock_pid" -o args= 2>/dev/null)
+                local start_time=$(ps -p "$lock_pid" -o lstart= 2>/dev/null)
+                local start_epoch=$(date -d "$start_time" +%s 2>/dev/null)
+                local now_epoch=$(date +%s)
+                local age_seconds=$((now_epoch - start_epoch))
+
+                echo "APT_LOCK_PID: $lock_pid"
+                echo "APT_LOCK_CMD: $lock_cmd"
+                echo "APT_LOCK_AGE: $age_seconds seconds"
+
+                if [ $age_seconds -lt $HUNG_THRESHOLD ]; then
+                    echo "AUTO_RECOVERY: INELIGIBLE - process running < 1 hour"
+                    return 1
+                fi
+
+                if ! echo "$lock_cmd" | grep -qE "(unattended-upgrade|apt.systemd.daily)"; then
+                    echo "AUTO_RECOVERY: INELIGIBLE - unknown process type"
+                    return 1
+                fi
+
+                echo "AUTO_RECOVERY: ELIGIBLE - killing hung process"
+                kill -9 "$lock_pid" 2>/dev/null
+                pkill -9 -f "apt.systemd.daily" 2>/dev/null || true
+                pkill -9 -f "unattended-upgrade" 2>/dev/null || true
+                sleep 3
+
+                if fuser "$LOCK_FILE" >/dev/null 2>&1; then
+                    echo "AUTO_RECOVERY: FAILED - lock still held"
+                    return 1
+                fi
+
+                echo "AUTO_RECOVERY: SUCCESS - lock released"
+                return 0
+            }
+
+            # Main logic
+            if ! wait_for_apt_lock; then
+                echo "APT_LOCK_TIMEOUT: Attempting auto-recovery"
+                if ! attempt_auto_recovery; then
+                    echo "APT_LOCK_REPORT: SKIPPED"
+                    exit 0
+                fi
+                echo "APT_LOCK_REPORT: AUTO_RECOVERED"
+            fi
+
+            # Install driver
+            apt install -y nvidia-driver-535
+            echo "NVIDIA_DRIVER_INSTALLED: nvidia-driver-535"
+
+  - states: ["3", "end"]
+    note: Verification
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== INSTALLATION RESULT ====="
+
+            if command -v nvidia-smi &> /dev/null; then
+                echo "NVIDIA_INSTALL_RESULT: SUCCESS"
+                echo "NVIDIA_SMI: available"
+                nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null
+            else
+                if lspci | grep -qi nvidia; then
+                    echo "NVIDIA_INSTALL_RESULT: PENDING_REBOOT"
+                    echo "NVIDIA_SMI: not yet available (reboot required)"
+                    dpkg -l | grep nvidia-driver | head -3 || echo "Driver package not found"
+                else
+                    echo "NVIDIA_INSTALL_RESULT: SKIPPED_NO_GPU"
+                fi
+            fi

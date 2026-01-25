@@ -1,0 +1,71 @@
+name: detect-apt-lock
+
+description: |
+  Read-only workflow to detect apt lock status on all nodes.
+  Does not modify anything - safe to run anytime.
+  No SUDO_PASSWORD required.
+
+  Output states:
+    - UNLOCKED: apt is available
+    - LOCKED_NORMAL: apt is busy but running normally (< 1 hour)
+    - LOCKED_HUNG: apt appears hung (>= 1 hour)
+
+steps:
+  - states: ["0", "end"]
+    note: Detect apt lock status on each node
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            LOCK_FILE="/var/lib/dpkg/lock-frontend"
+            HUNG_THRESHOLD=3600  # 1 hour in seconds
+
+            # Get PID holding the lock
+            LOCK_PID=$(fuser "$LOCK_FILE" 2>/dev/null | awk '{print $1}')
+
+            if [ -z "$LOCK_PID" ]; then
+                echo "APT_LOCK: UNLOCKED"
+                exit 0
+            fi
+
+            # Get process information
+            LOCK_CMD=$(ps -p "$LOCK_PID" -o args= 2>/dev/null)
+            START_TIME=$(ps -p "$LOCK_PID" -o lstart= 2>/dev/null)
+
+            if [ -z "$START_TIME" ]; then
+                echo "APT_LOCK: LOCKED_UNKNOWN"
+                echo "  PID: $LOCK_PID"
+                echo "  CMD: $LOCK_CMD"
+                echo "  AGE: unknown (cannot determine start time)"
+                exit 0
+            fi
+
+            # Calculate age in seconds
+            START_EPOCH=$(date -d "$START_TIME" +%s 2>/dev/null)
+            NOW_EPOCH=$(date +%s)
+            AGE_SECONDS=$((NOW_EPOCH - START_EPOCH))
+
+            # Human-readable age
+            if [ $AGE_SECONDS -ge 86400 ]; then
+                AGE_HUMAN="$((AGE_SECONDS / 86400)) days"
+            elif [ $AGE_SECONDS -ge 3600 ]; then
+                AGE_HUMAN="$((AGE_SECONDS / 3600)) hours"
+            else
+                AGE_HUMAN="$((AGE_SECONDS / 60)) minutes"
+            fi
+
+            # Determine status
+            if [ $AGE_SECONDS -ge $HUNG_THRESHOLD ]; then
+                echo "APT_LOCK: LOCKED_HUNG"
+                echo "  PID: $LOCK_PID"
+                echo "  CMD: $LOCK_CMD"
+                echo "  AGE: $AGE_HUMAN"
+                echo "  ACTION_REQUIRED: Yes - process appears hung"
+            else
+                echo "APT_LOCK: LOCKED_NORMAL"
+                echo "  PID: $LOCK_PID"
+                echo "  CMD: $LOCK_CMD"
+                echo "  AGE: $AGE_HUMAN"
+                echo "  ACTION_REQUIRED: No - wait for completion"
+            fi

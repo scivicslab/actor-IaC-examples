@@ -1,0 +1,161 @@
+name: recover-apt-lock
+
+description: |
+  Recovery workflow for hung apt processes.
+  IMPORTANT: Use with explicit node targeting (-t option).
+
+  Safety checks before killing:
+    1. Process must be running >= 1 hour
+    2. Process must be unattended-upgrade or apt.systemd.daily
+
+  Requires: export SUDO_PASSWORD="your-password" before running.
+
+steps:
+  - states: ["0", "1"]
+    note: Diagnose apt lock status
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            LOCK_FILE="/var/lib/dpkg/lock-frontend"
+            HUNG_THRESHOLD=3600  # 1 hour
+
+            echo "=== APT Lock Recovery Diagnosis ==="
+
+            LOCK_PID=$(fuser "$LOCK_FILE" 2>/dev/null | awk '{print $1}')
+
+            if [ -z "$LOCK_PID" ]; then
+                echo "STATUS: No apt lock detected"
+                echo "RECOVERY_NEEDED: false"
+                exit 0
+            fi
+
+            LOCK_CMD=$(ps -p "$LOCK_PID" -o args= 2>/dev/null)
+            START_TIME=$(ps -p "$LOCK_PID" -o lstart= 2>/dev/null)
+
+            if [ -z "$START_TIME" ]; then
+                echo "STATUS: Lock held but cannot determine process age"
+                echo "LOCK_PID: $LOCK_PID"
+                echo "LOCK_CMD: $LOCK_CMD"
+                echo "RECOVERY_NEEDED: manual"
+                exit 0
+            fi
+
+            START_EPOCH=$(date -d "$START_TIME" +%s 2>/dev/null)
+            NOW_EPOCH=$(date +%s)
+            AGE_SECONDS=$((NOW_EPOCH - START_EPOCH))
+
+            # Human-readable age
+            if [ $AGE_SECONDS -ge 86400 ]; then
+                AGE_HUMAN="$((AGE_SECONDS / 86400)) days"
+            elif [ $AGE_SECONDS -ge 3600 ]; then
+                AGE_HUMAN="$((AGE_SECONDS / 3600)) hours"
+            else
+                AGE_HUMAN="$((AGE_SECONDS / 60)) minutes"
+            fi
+
+            echo "LOCK_PID: $LOCK_PID"
+            echo "LOCK_CMD: $LOCK_CMD"
+            echo "LOCK_AGE: $AGE_HUMAN ($AGE_SECONDS seconds)"
+
+            # Safety check 1: Age threshold
+            if [ $AGE_SECONDS -lt $HUNG_THRESHOLD ]; then
+                echo "SAFETY_CHECK: FAIL - process running < 1 hour"
+                echo "RECOVERY_NEEDED: false"
+                echo "RECOMMENDATION: Wait for process to complete"
+                exit 0
+            fi
+
+            # Safety check 2: Known automated process
+            if echo "$LOCK_CMD" | grep -qE "(unattended-upgrade|apt.systemd.daily)"; then
+                echo "SAFETY_CHECK: PASS - known automated process, running >= 1 hour"
+                echo "RECOVERY_NEEDED: true"
+                echo "TARGET_PID: $LOCK_PID"
+            else
+                echo "SAFETY_CHECK: WARN - unknown process type"
+                echo "RECOVERY_NEEDED: manual"
+                echo "RECOMMENDATION: Manually verify before killing: kill -9 $LOCK_PID"
+                exit 0
+            fi
+
+  - states: ["1", "2"]
+    note: Kill hung process (only if safe)
+    actions:
+      - actor: this
+        method: executeSudoCommand
+        arguments:
+          - |
+            LOCK_FILE="/var/lib/dpkg/lock-frontend"
+            HUNG_THRESHOLD=3600
+
+            # Re-check lock status (race condition protection)
+            LOCK_PID=$(fuser "$LOCK_FILE" 2>/dev/null | awk '{print $1}')
+
+            if [ -z "$LOCK_PID" ]; then
+                echo "ACTION: None - lock already released"
+                exit 0
+            fi
+
+            # Re-verify process type before killing
+            LOCK_CMD=$(ps -p "$LOCK_PID" -o args= 2>/dev/null)
+            if ! echo "$LOCK_CMD" | grep -qE "(unattended-upgrade|apt.systemd.daily)"; then
+                echo "ACTION: Aborted - process type changed or not eligible"
+                exit 0
+            fi
+
+            # Re-verify age
+            START_TIME=$(ps -p "$LOCK_PID" -o lstart= 2>/dev/null)
+            START_EPOCH=$(date -d "$START_TIME" +%s 2>/dev/null)
+            NOW_EPOCH=$(date +%s)
+            AGE_SECONDS=$((NOW_EPOCH - START_EPOCH))
+
+            if [ $AGE_SECONDS -lt $HUNG_THRESHOLD ]; then
+                echo "ACTION: Aborted - process age changed"
+                exit 0
+            fi
+
+            echo "ACTION: Killing process $LOCK_PID ($LOCK_CMD)"
+            kill -9 "$LOCK_PID" 2>/dev/null
+
+            # Also kill related processes
+            echo "ACTION: Killing related apt.systemd.daily processes"
+            pkill -9 -f "apt.systemd.daily" 2>/dev/null || true
+
+            echo "ACTION: Killing related unattended-upgrade processes"
+            pkill -9 -f "unattended-upgrade" 2>/dev/null || true
+
+            sleep 2
+            echo "Kill commands executed"
+
+  - states: ["2", "end"]
+    note: Verify recovery
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            LOCK_FILE="/var/lib/dpkg/lock-frontend"
+
+            echo "=== Recovery Verification ==="
+
+            if fuser "$LOCK_FILE" >/dev/null 2>&1; then
+                NEW_PID=$(fuser "$LOCK_FILE" 2>/dev/null | awk '{print $1}')
+                NEW_CMD=$(ps -p "$NEW_PID" -o args= 2>/dev/null)
+                echo "RESULT: PARTIAL - lock still held"
+                echo "  NEW_PID: $NEW_PID"
+                echo "  NEW_CMD: $NEW_CMD"
+                echo "RECOMMENDATION: May need manual intervention or reboot"
+            else
+                echo "RESULT: SUCCESS - apt lock released"
+            fi
+
+            # Test apt functionality
+            echo ""
+            echo "=== APT Functionality Test ==="
+            if apt-get check >/dev/null 2>&1; then
+                echo "apt-get check: OK"
+            else
+                echo "apt-get check: FAIL"
+                echo "RECOMMENDATION: Run 'sudo dpkg --configure -a' to fix"
+            fi

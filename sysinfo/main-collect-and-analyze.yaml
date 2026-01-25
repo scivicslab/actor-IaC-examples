@@ -1,8 +1,11 @@
-name: CollectAndAnalyze
+name: main-collect-and-analyze
+
+description: |
+  Collect system info from all nodes and summarize GPU information using plugin.
 
 steps:
   - states: ["0", "1"]
-    note: Collect system info on all nodes in parallel
+    note: Collect system info on all nodes
     actions:
       - actor: nodeGroup
         method: apply
@@ -19,22 +22,21 @@ steps:
         arguments: ["plugins/actor-IaC-plugins-1.0.0.jar"]
 
   - states: ["2", "3"]
-    note: Create aggregator as child of loader
+    note: Create aggregator actor
     actions:
       - actor: loader
         method: createChild
         arguments: ["loader", "aggregator", "com.scivicslab.actoriac.plugins.h2analyzer.SystemInfoAggregator"]
 
   - states: ["3", "4"]
-    note: Connect to database
+    note: Connect to log database
     actions:
       - actor: aggregator
         method: connect
         arguments: ["./actor-iac-logs"]
 
   - states: ["4", "end"]
-    note: Summarize all system info (CPU, GPU, memory, disk, network)
+    note: Summarize GPU info
     actions:
       - actor: aggregator
-        method: summarize-all
-        arguments: []
+        method: summarize-gpus

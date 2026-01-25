@@ -1,0 +1,28 @@
+name: main-verify-prereqs
+
+description: |
+  Main workflow to verify prerequisites on all nodes and generate a report.
+
+steps:
+  - states: ["0", "1"]
+    note: Load WorkflowReporter
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
+
+  - states: ["1", "2"]
+    note: Run prerequisite checks on all nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["verify-prereqs.yaml"]
+
+  - states: ["2", "end"]
+    note: Generate report
+    actions:
+      - actor: workflowReporter
+        method: report

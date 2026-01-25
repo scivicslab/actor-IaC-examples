@@ -52,7 +52,7 @@ steps:
             df -h | grep -E "^(/dev|Filesystem)"
 
   - states: ["4", "5"]
-    note: Retrieve GPU presence and model name (uses nvidia-smi for NVIDIA GPUs)
+    note: Retrieve GPU presence and detailed info (uses nvidia-smi for NVIDIA GPUs)
     actions:
       - actor: this
         method: executeCommand
@@ -60,8 +60,12 @@ steps:
           - |
             echo "===== GPU INFO ====="
             if command -v nvidia-smi &> /dev/null; then
-                nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null || echo "nvidia-smi failed"
+                # Get GPU details: name, vram, driver, compute capability
+                nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap --format=csv,noheader 2>/dev/null || echo "nvidia-smi query failed"
+                # Get CUDA version from nvidia-smi header
+                echo "CUDA_VERSION: $(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9.]+' || echo 'N/A')"
             else
+                # Fallback for non-NVIDIA GPUs
                 lspci 2>/dev/null | grep -i -E "(vga|3d|display)" || echo "No GPU detected via lspci"
             fi
 

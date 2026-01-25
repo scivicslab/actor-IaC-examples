@@ -1,0 +1,37 @@
+name: TestAggregatorConnect
+
+steps:
+  - states: ["0", "1"]
+    note: Load plugin JAR
+    actions:
+      - actor: loader
+        method: loadJar
+        arguments: ["plugins/actor-IaC-plugins-1.0.0.jar"]
+
+  - states: ["1", "2"]
+    note: Create aggregator
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["loader", "aggregator", "com.scivicslab.actoriac.plugins.h2analyzer.SystemInfoAggregator"]
+
+  - states: ["2", "3"]
+    note: Connect to database (this tests our fix)
+    actions:
+      - actor: aggregator
+        method: connect
+        arguments: ["./actor-iac-logs"]
+
+  - states: ["3", "4"]
+    note: List sessions
+    actions:
+      - actor: aggregator
+        method: list-sessions
+        arguments: []
+
+  - states: ["4", "end"]
+    note: Disconnect
+    actions:
+      - actor: aggregator
+        method: disconnect
+        arguments: []

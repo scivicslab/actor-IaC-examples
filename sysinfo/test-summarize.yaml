@@ -1,0 +1,32 @@
+name: TestSummarize
+
+steps:
+  - states: ["0", "1"]
+    actions:
+      - actor: loader
+        method: loadJar
+        arguments: ["plugins/actor-IaC-plugins-1.0.0.jar"]
+
+  - states: ["1", "2"]
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["loader", "aggregator", "com.scivicslab.actoriac.plugins.h2analyzer.SystemInfoAggregator"]
+
+  - states: ["2", "3"]
+    actions:
+      - actor: aggregator
+        method: connect
+        arguments: ["./actor-iac-logs"]
+
+  - states: ["3", "4"]
+    actions:
+      - actor: aggregator
+        method: summarize-all
+        arguments: []
+
+  - states: ["4", "end"]
+    actions:
+      - actor: aggregator
+        method: disconnect
+        arguments: []

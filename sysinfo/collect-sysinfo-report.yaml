@@ -1,0 +1,82 @@
+name: collect-sysinfo-report
+
+description: |
+  Sub-workflow to collect system information and output summary with % prefix.
+  Key information is marked with % for aggregation by WorkflowReporter.
+
+steps:
+  - states: ["0", "1"]
+    note: Retrieve hostname and OS information
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+            OS_NAME=$(grep -E "^PRETTY_NAME=" /etc/os-release 2>/dev/null | cut -d'"' -f2)
+            echo "%--------------------"
+            echo "%[INFO] Hostname: $HOSTNAME"
+            echo "%[INFO] OS: $OS_NAME"
+
+  - states: ["1", "2"]
+    note: Retrieve CPU information
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            CPU_MODEL=$(LANG=C lscpu | grep "Model name:" | sed 's/Model name:\s*//')
+            CPU_CORES=$(LANG=C lscpu | grep "^CPU(s):" | awk '{print $2}')
+            echo "%[INFO] CPU: $CPU_MODEL ($CPU_CORES cores)"
+
+  - states: ["2", "3"]
+    note: Retrieve memory information
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            MEM_TOTAL=$(free -h | awk '/^Mem:/ {print $2}')
+            echo "%[INFO] Memory: $MEM_TOTAL"
+
+  - states: ["3", "4"]
+    note: Retrieve disk information
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            # List physical disks (not loop devices)
+            lsblk -d -n -o NAME,SIZE,MODEL 2>/dev/null | grep -v "^loop" | while read NAME SIZE MODEL; do
+              echo "%[INFO] Disk: $NAME $SIZE $MODEL"
+            done
+
+  - states: ["4", "5"]
+    note: Retrieve GPU information
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            if command -v nvidia-smi &> /dev/null; then
+              GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+              echo "%[INFO] GPU: $GPU (NVIDIA)"
+            else
+              GPU=$(lspci 2>/dev/null | grep -i -E "(vga|3d|display)" | head -1 | sed 's/.*: //')
+              if [ -n "$GPU" ]; then
+                echo "%[INFO] GPU: $GPU"
+              else
+                echo "%[INFO] GPU: Not detected"
+              fi
+            fi
+
+  - states: ["5", "end"]
+    note: Retrieve network information
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            # Get primary IP address (non-loopback)
+            PRIMARY_IP=$(ip -4 addr show | grep -v "127.0.0.1" | grep "inet " | head -1 | awk '{print $2}' | cut -d'/' -f1)
+            echo "%[INFO] Network: $PRIMARY_IP"

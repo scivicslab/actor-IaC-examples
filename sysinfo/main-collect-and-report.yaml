@@ -1,0 +1,29 @@
+name: main-collect-and-report
+
+description: |
+  Main workflow to collect system information and generate a summary report.
+  Uses WorkflowReporter (no plugin required) to aggregate % prefixed output.
+
+steps:
+  - states: ["0", "1"]
+    note: Load WorkflowReporter
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
+
+  - states: ["1", "2"]
+    note: Collect system info on all nodes in parallel
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["collect-sysinfo-report.yaml"]
+
+  - states: ["2", "end"]
+    note: Generate summary report
+    actions:
+      - actor: workflowReporter
+        method: report

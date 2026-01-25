@@ -1,0 +1,32 @@
+name: verify-prereqs
+
+description: |
+  Check prerequisites on each node and report results with % prefix.
+
+steps:
+  - states: ["0", "1"]
+    note: Check if Node.js is installed
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            if command -v node > /dev/null 2>&1; then
+              echo "%[OK] Node.js: $(node --version)"
+            else
+              echo "%[ERROR] Node.js: not found"
+            fi
+
+  - states: ["1", "end"]
+    note: Check if yarn is installed
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            if command -v yarn > /dev/null 2>&1; then
+              echo "%[OK] yarn: $(yarn --version)"
+            else
+              echo "%[ERROR] yarn: not found"
+              echo "  → Run: npm install -g yarn"
+            fi

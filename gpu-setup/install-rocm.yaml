@@ -1,0 +1,95 @@
+name: install-rocm
+
+description: |
+  Sub-workflow to install ROCm on AMD GPU nodes.
+  Includes rocm-smi and rocminfo for GPU monitoring.
+
+steps:
+  - states: ["0", "1"]
+    note: Check current AMD GPU status
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== CURRENT STATUS ====="
+            echo "rocm-smi: $(command -v rocm-smi || echo 'not found')"
+            echo "rocminfo: $(command -v rocminfo || echo 'not found')"
+            echo ""
+            echo "lspci AMD GPU:"
+            lspci | grep -i amd | grep -iE "(vga|display|3d)" || echo "No AMD GPU found"
+            echo ""
+            echo "Loaded amdgpu modules:"
+            lsmod | grep amdgpu || echo "No amdgpu modules loaded"
+
+  - states: ["1", "2"]
+    note: Install prerequisites
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== INSTALLING PREREQUISITES ====="
+            sudo apt install -y wget gnupg2
+
+  - states: ["2", "3"]
+    note: Download and install amdgpu-install package
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== ADDING AMD REPOSITORY ====="
+            cd /tmp
+            # Detect Ubuntu version
+            . /etc/os-release
+            UBUNTU_CODENAME=${VERSION_CODENAME:-jammy}
+            echo "Ubuntu codename: $UBUNTU_CODENAME"
+
+            # Download amdgpu-install for the detected version
+            ROCM_VERSION="6.0"
+            wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/${UBUNTU_CODENAME}/amdgpu-install_6.0.60000-1_all.deb -O amdgpu-install.deb || \
+            wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/jammy/amdgpu-install_6.0.60000-1_all.deb -O amdgpu-install.deb
+
+            sudo dpkg -i amdgpu-install.deb
+            sudo apt update
+
+  - states: ["3", "4"]
+    note: Install ROCm
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== INSTALLING ROCM ====="
+            sudo amdgpu-install -y --usecase=rocm --no-dkms || sudo amdgpu-install -y --usecase=rocm
+            echo "ROCm installation complete."
+
+  - states: ["4", "5"]
+    note: Add user to render and video groups
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== CONFIGURING USER GROUPS ====="
+            sudo usermod -aG render,video $USER
+            echo "User $USER added to render and video groups"
+            groups $USER
+
+  - states: ["5", "end"]
+    note: Verify installation (before reboot)
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== VERIFICATION ====="
+            echo "ROCm version:"
+            cat /opt/rocm/.info/version 2>/dev/null || echo "Version file not found"
+            echo ""
+            echo "Installed packages:"
+            dpkg -l | grep -E "(rocm|amdgpu)" | head -10
+            echo ""
+            echo "Note: rocm-smi will work after reboot"
+            echo "Run: sudo reboot"

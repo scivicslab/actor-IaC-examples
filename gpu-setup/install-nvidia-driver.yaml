@@ -1,0 +1,66 @@
+name: install-nvidia-driver
+
+description: |
+  Sub-workflow to install NVIDIA driver on a node.
+  Includes nvidia-smi for GPU monitoring.
+
+steps:
+  - states: ["0", "1"]
+    note: Check current NVIDIA driver status
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== CURRENT STATUS ====="
+            echo "nvidia-smi: $(command -v nvidia-smi || echo 'not found')"
+            echo "lspci GPU:"
+            lspci | grep -i nvidia || echo "No NVIDIA GPU found"
+            echo ""
+            echo "Loaded nvidia modules:"
+            lsmod | grep nvidia || echo "No nvidia modules loaded"
+
+  - states: ["1", "2"]
+    note: Add graphics-drivers PPA and update
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== ADDING PPA ====="
+            sudo add-apt-repository ppa:graphics-drivers/ppa -y
+            sudo apt update
+
+  - states: ["2", "3"]
+    note: Check recommended driver
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== RECOMMENDED DRIVERS ====="
+            ubuntu-drivers devices 2>/dev/null || echo "ubuntu-drivers not available"
+
+  - states: ["3", "4"]
+    note: Install NVIDIA driver 535
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== INSTALLING NVIDIA DRIVER ====="
+            sudo apt install -y nvidia-driver-535
+            echo "Installation complete. Reboot required."
+
+  - states: ["4", "end"]
+    note: Verify installation (before reboot)
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "===== VERIFICATION ====="
+            dpkg -l | grep nvidia-driver
+            echo ""
+            echo "Note: nvidia-smi will work after reboot"
+            echo "Run: sudo reboot"

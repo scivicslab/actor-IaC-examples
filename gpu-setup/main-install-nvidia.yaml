@@ -1,0 +1,16 @@
+name: main-install-nvidia
+
+description: |
+  Install NVIDIA driver on nodes without nvidia-smi.
+  Target: nodes with NVIDIA GPU but no driver installed.
+
+steps:
+  - states: ["0", "end"]
+    note: Install NVIDIA driver on all target nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["gpu-setup/install-nvidia-driver.yaml"]

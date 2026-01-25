@@ -1,0 +1,16 @@
+name: main-install-rocm
+
+description: |
+  Install ROCm on AMD GPU nodes without rocm-smi.
+  Target: nodes with AMD GPU but no ROCm installed.
+
+steps:
+  - states: ["0", "end"]
+    note: Install ROCm on all target nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["gpu-setup/install-rocm.yaml"]

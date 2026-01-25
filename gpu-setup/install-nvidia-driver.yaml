@@ -1,61 +1,107 @@
 name: install-nvidia-driver
 
 description: |
-  Sub-workflow to install NVIDIA driver on a node.
-  Includes nvidia-smi for GPU monitoring.
+  Idempotent workflow to install NVIDIA driver on a node.
+  - If nvidia-smi is already available, does nothing (no upgrade)
+  - If not installed, installs nvidia-driver-535
   Requires: export SUDO_PASSWORD="your-password" before running.
 
 steps:
   - states: ["0", "1"]
-    note: Check current NVIDIA driver status
+    note: Check if nvidia-smi is already installed
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
-            echo "===== CURRENT STATUS ====="
-            echo "nvidia-smi: $(command -v nvidia-smi || echo 'not found')"
-            echo "lspci GPU:"
-            lspci | grep -i nvidia || echo "No NVIDIA GPU found"
-            echo ""
-            echo "Loaded nvidia modules:"
-            lsmod | grep nvidia || echo "No nvidia modules loaded"
+            if command -v nvidia-smi &> /dev/null; then
+                echo "NVIDIA_DRIVER_INSTALLED=true"
+                echo "Current driver:"
+                nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || echo "unknown"
+            else
+                echo "NVIDIA_DRIVER_INSTALLED=false"
+                echo "Checking for NVIDIA GPU..."
+                lspci | grep -i nvidia || echo "No NVIDIA GPU found"
+            fi
 
   - states: ["1", "2"]
-    note: Add graphics-drivers PPA and update
+    note: Skip if already installed, otherwise wait for apt lock
     actions:
       - actor: this
-        method: executeSudoCommand
+        method: executeCommand
         arguments:
-          - "add-apt-repository ppa:graphics-drivers/ppa -y && apt update"
+          - |
+            if command -v nvidia-smi &> /dev/null; then
+                echo "SKIP: nvidia-smi already installed, no action needed"
+                exit 0
+            fi
+            # Check if this node has NVIDIA GPU
+            if ! lspci | grep -qi nvidia; then
+                echo "SKIP: No NVIDIA GPU detected"
+                exit 0
+            fi
+            echo "NVIDIA GPU found, will install driver"
 
   - states: ["2", "3"]
-    note: Check recommended driver
-    actions:
-      - actor: this
-        method: executeCommand
-        arguments:
-          - |
-            echo "===== RECOMMENDED DRIVERS ====="
-            ubuntu-drivers devices 2>/dev/null || echo "ubuntu-drivers not available"
-
-  - states: ["3", "4"]
-    note: Install NVIDIA driver 535
+    note: Wait for apt lock and add PPA (skip if already installed)
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
-          - "apt install -y nvidia-driver-535"
+          - |
+            if command -v nvidia-smi &> /dev/null; then
+                echo "SKIP"
+                exit 0
+            fi
+            if ! lspci | grep -qi nvidia; then
+                echo "SKIP"
+                exit 0
+            fi
+            # Wait for apt lock
+            while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+                echo "Waiting for apt lock..."
+                sleep 5
+            done
+            add-apt-repository ppa:graphics-drivers/ppa -y && apt update
+
+  - states: ["3", "4"]
+    note: Install NVIDIA driver (skip if already installed)
+    actions:
+      - actor: this
+        method: executeSudoCommand
+        arguments:
+          - |
+            if command -v nvidia-smi &> /dev/null; then
+                echo "SKIP"
+                exit 0
+            fi
+            if ! lspci | grep -qi nvidia; then
+                echo "SKIP"
+                exit 0
+            fi
+            # Wait for apt lock
+            while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+                echo "Waiting for apt lock..."
+                sleep 5
+            done
+            apt install -y nvidia-driver-535
 
   - states: ["4", "end"]
-    note: Verify installation (before reboot)
+    note: Verification
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
-            echo "===== VERIFICATION ====="
-            dpkg -l | grep nvidia-driver
-            echo ""
-            echo "Note: nvidia-smi will work after reboot"
-            echo "Run: sudo reboot"
+            echo "===== RESULT ====="
+            if command -v nvidia-smi &> /dev/null; then
+                echo "nvidia-smi: installed"
+                nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null
+            else
+                if lspci | grep -qi nvidia; then
+                    echo "nvidia-smi: not yet available (reboot required)"
+                    dpkg -l | grep nvidia-driver || echo "Driver package not found"
+                else
+                    echo "No NVIDIA GPU on this node"
+                fi
+            fi

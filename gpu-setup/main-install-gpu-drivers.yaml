@@ -1,0 +1,31 @@
+name: main-install-gpu-drivers
+
+description: |
+  Idempotent workflow to install GPU drivers on all compute nodes.
+  - NVIDIA nodes: installs nvidia-driver-535 (if not already installed)
+  - AMD nodes: installs ROCm 6.0 (if not already installed)
+  - Already installed: does nothing (no upgrade)
+
+  Can be safely run against all compute nodes - skips nodes without GPU
+  or with drivers already installed.
+
+steps:
+  - states: ["0", "1"]
+    note: Install NVIDIA drivers (idempotent)
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["gpu-setup/install-nvidia-driver.yaml"]
+
+  - states: ["1", "end"]
+    note: Install ROCm (idempotent)
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["gpu-setup/install-rocm.yaml"]

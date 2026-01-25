@@ -1,44 +1,83 @@
 name: install-rocm
 
 description: |
-  Sub-workflow to install ROCm on AMD GPU nodes.
-  Includes rocm-smi and rocminfo for GPU monitoring.
+  Idempotent workflow to install ROCm on AMD GPU nodes.
+  - If rocm-smi is already available, does nothing (no upgrade)
+  - If not installed, installs ROCm 6.0
   Requires: export SUDO_PASSWORD="your-password" before running.
 
 steps:
   - states: ["0", "1"]
-    note: Check current AMD GPU status
+    note: Check if rocm-smi is already installed
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
-            echo "===== CURRENT STATUS ====="
-            echo "rocm-smi: $(command -v rocm-smi || echo 'not found')"
-            echo "rocminfo: $(command -v rocminfo || echo 'not found')"
-            echo ""
-            echo "lspci AMD GPU:"
-            lspci | grep -i amd | grep -iE "(vga|display|3d)" || echo "No AMD GPU found"
-            echo ""
-            echo "Loaded amdgpu modules:"
-            lsmod | grep amdgpu || echo "No amdgpu modules loaded"
+            if command -v rocm-smi &> /dev/null; then
+                echo "ROCM_INSTALLED=true"
+                echo "Current ROCm version:"
+                cat /opt/rocm/.info/version 2>/dev/null || echo "unknown"
+            else
+                echo "ROCM_INSTALLED=false"
+                echo "Checking for AMD GPU..."
+                lspci | grep -iE "amd.*(vga|display|3d)" || echo "No AMD GPU found"
+            fi
 
   - states: ["1", "2"]
-    note: Install prerequisites
+    note: Skip if already installed or no AMD GPU
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            if command -v rocm-smi &> /dev/null; then
+                echo "SKIP: rocm-smi already installed, no action needed"
+                exit 0
+            fi
+            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
+                echo "SKIP: No AMD GPU detected"
+                exit 0
+            fi
+            echo "AMD GPU found, will install ROCm"
+
+  - states: ["2", "3"]
+    note: Install prerequisites (skip if already installed)
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
-          - "apt install -y wget gnupg2"
+          - |
+            if command -v rocm-smi &> /dev/null; then
+                echo "SKIP"
+                exit 0
+            fi
+            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
+                echo "SKIP"
+                exit 0
+            fi
+            # Wait for apt lock
+            while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+                echo "Waiting for apt lock..."
+                sleep 5
+            done
+            apt install -y wget gnupg2
 
-  - states: ["2", "3"]
-    note: Download and install amdgpu-install package
+  - states: ["3", "4"]
+    note: Download amdgpu-install package (skip if already installed)
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
-            echo "===== DOWNLOADING AMD REPOSITORY PACKAGE ====="
+            if command -v rocm-smi &> /dev/null; then
+                echo "SKIP"
+                exit 0
+            fi
+            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
+                echo "SKIP"
+                exit 0
+            fi
             cd /tmp
             . /etc/os-release
             UBUNTU_CODENAME=${VERSION_CODENAME:-jammy}
@@ -46,45 +85,64 @@ steps:
             ROCM_VERSION="6.0"
             wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/${UBUNTU_CODENAME}/amdgpu-install_6.0.60000-1_all.deb -O amdgpu-install.deb || \
             wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/jammy/amdgpu-install_6.0.60000-1_all.deb -O amdgpu-install.deb
-            echo "Download complete: $(ls -la /tmp/amdgpu-install.deb)"
-
-  - states: ["3", "4"]
-    note: Install amdgpu-install package and update
-    actions:
-      - actor: this
-        method: executeSudoCommand
-        arguments:
-          - "dpkg -i /tmp/amdgpu-install.deb && apt update"
+            echo "Download complete"
 
   - states: ["4", "5"]
-    note: Install ROCm
+    note: Install amdgpu-install and ROCm (skip if already installed)
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
-          - "amdgpu-install -y --usecase=rocm --no-dkms"
+          - |
+            if command -v rocm-smi &> /dev/null; then
+                echo "SKIP"
+                exit 0
+            fi
+            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
+                echo "SKIP"
+                exit 0
+            fi
+            # Wait for apt lock
+            while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+                echo "Waiting for apt lock..."
+                sleep 5
+            done
+            dpkg -i /tmp/amdgpu-install.deb && apt update
+            amdgpu-install -y --usecase=rocm --no-dkms
 
   - states: ["5", "6"]
-    note: Add user to render and video groups
+    note: Add user to render and video groups (skip if already installed)
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
-          - "usermod -aG render,video devteam"
+          - |
+            if command -v rocm-smi &> /dev/null; then
+                echo "SKIP"
+                exit 0
+            fi
+            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
+                echo "SKIP"
+                exit 0
+            fi
+            usermod -aG render,video devteam
 
   - states: ["6", "end"]
-    note: Verify installation (before reboot)
+    note: Verification
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
-            echo "===== VERIFICATION ====="
-            echo "ROCm version:"
-            cat /opt/rocm/.info/version 2>/dev/null || echo "Version file not found"
-            echo ""
-            echo "Installed packages:"
-            dpkg -l | grep -E "(rocm|amdgpu)" | head -10
-            echo ""
-            echo "Note: rocm-smi will work after reboot"
-            echo "Run: sudo reboot"
+            echo "===== RESULT ====="
+            if command -v rocm-smi &> /dev/null; then
+                echo "rocm-smi: installed"
+                cat /opt/rocm/.info/version 2>/dev/null || echo "version unknown"
+            else
+                if lspci | grep -qiE "amd.*(vga|display|3d)"; then
+                    echo "rocm-smi: not yet available (reboot required)"
+                    dpkg -l | grep rocm | head -5 || echo "ROCm packages not found"
+                else
+                    echo "No AMD GPU on this node"
+                fi
+            fi

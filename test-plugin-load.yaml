@@ -1,0 +1,32 @@
+name: test-plugin-load
+
+steps:
+  - states: ["0", "1"]
+    note: Load plugin JAR
+    actions:
+      - actor: loader
+        method: loadJar
+        arguments: ["../actor-IaC-plugins/target/actor-IaC-plugins-1.0.0.jar"]
+
+  - states: ["1", "2"]
+    note: Create AptLockChecker
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["this", "aptChecker", "com.scivicslab.actoriac.plugins.aptcheck.AptLockChecker"]
+
+  - states: ["2", "3"]
+    note: Get process list
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments: ["ps -eo pid,etimes,args 2>/dev/null | head -20"]
+
+  - states: ["3", "end"]
+    note: Check for hung apt processes
+    actions:
+      - actor: aptChecker
+        method: check
+        arguments:
+          psOutput: "${result}"
+          hostname: "localhost"

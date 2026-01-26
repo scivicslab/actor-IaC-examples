@@ -61,8 +61,13 @@ steps:
         method: executeCommand
         arguments:
           - |
+            HOSTNAME=$(hostname -s)
             RESULT='${result}'
             if echo "$RESULT" | grep -q "^HUNG:"; then
+                # Extract PID and age from HUNG:pid:age format
+                PID=$(echo "$RESULT" | sed 's/HUNG:\([0-9]*\):.*/\1/')
+                AGE=$(echo "$RESULT" | sed 's/HUNG:[0-9]*:\(.*\)/\1/')
+                echo "%$HOSTNAME: [SKIP] APT_HUNG ($AGE) PID=$PID"
                 echo "SKIP_REASON=APT_HUNG"
             else
                 echo "SKIP_REASON=none"

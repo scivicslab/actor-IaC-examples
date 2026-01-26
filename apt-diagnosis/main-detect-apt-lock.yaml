@@ -14,6 +14,12 @@ steps:
         arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
 
   - states: ["1", "2"]
+    note: Output workflow info to report
+    actions:
+      - actor: workflowReporter
+        method: addWorkflowInfo
+
+  - states: ["2", "3"]
     note: Detect apt lock status on all nodes
     actions:
       - actor: nodeGroup
@@ -23,7 +29,7 @@ steps:
           method: runWorkflow
           arguments: ["apt-diagnosis/detect-apt-lock.yaml"]
 
-  - states: ["2", "end"]
+  - states: ["3", "end"]
     note: Generate report
     actions:
       - actor: workflowReporter

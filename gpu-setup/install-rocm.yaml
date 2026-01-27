@@ -22,15 +22,8 @@ steps:
             HUNG_PIDS=$(ps -eo pid,etimes,args 2>/dev/null | grep -E "/usr/lib/apt/apt.systemd.daily|/usr/bin/unattended-upgrade " | grep -v grep | awk -v th=$HUNG_THRESHOLD '$2 >= th {print $1}')
 
             if [ -n "$HUNG_PIDS" ]; then
-                FIRST_PID=$(echo "$HUNG_PIDS" | head -1)
-                ETIME=$(ps -p "$FIRST_PID" -o etimes= 2>/dev/null)
-                if [ "$ETIME" -ge 86400 ] 2>/dev/null; then
-                    AGE="$((ETIME / 86400))d"
-                else
-                    AGE="$((ETIME / 3600))h"
-                fi
-                echo "APT_HUNG: yes"
-                echo "%$HOSTNAME: [SKIP] APT_HUNG ($AGE) - ROCm"
+                # APT_HUNG message is already output by NVIDIA workflow, so skip silently
+                echo "APT_HUNG: yes (skipping ROCm installation)"
                 exit 0
             fi
 

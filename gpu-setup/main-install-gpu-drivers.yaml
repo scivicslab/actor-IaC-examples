@@ -19,6 +19,12 @@ steps:
         arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
 
   - states: ["1", "2"]
+    note: Output workflow info to report
+    actions:
+      - actor: workflowReporter
+        method: addWorkflowInfo
+
+  - states: ["2", "3"]
     note: Install NVIDIA drivers (idempotent)
     actions:
       - actor: nodeGroup
@@ -28,7 +34,7 @@ steps:
           method: runWorkflow
           arguments: ["gpu-setup/install-nvidia-driver.yaml"]
 
-  - states: ["2", "3"]
+  - states: ["3", "4"]
     note: Install ROCm (idempotent)
     actions:
       - actor: nodeGroup
@@ -38,7 +44,7 @@ steps:
           method: runWorkflow
           arguments: ["gpu-setup/install-rocm.yaml"]
 
-  - states: ["3", "end"]
+  - states: ["4", "end"]
     note: Generate report
     actions:
       - actor: workflowReporter

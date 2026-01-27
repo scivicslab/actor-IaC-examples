@@ -92,8 +92,9 @@ steps:
             HOSTNAME=$(hostname -s)
             SKIP='${json.skipReason}'
 
-            # Skip if apt hung was detected
+            # Skip if apt hung was detected (preserve skip reason for next step)
             if echo "$SKIP" | grep -q "APT_HUNG"; then
+                echo "SKIP_REASON=APT_HUNG"
                 exit 0
             fi
 

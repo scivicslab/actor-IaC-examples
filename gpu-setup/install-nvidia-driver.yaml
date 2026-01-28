@@ -114,6 +114,14 @@ steps:
                 exit 0
             fi
 
+            # Check if user has sudo access by actually trying sudo
+            SUDO_CHECK=$(timeout 1 sudo -S true < /dev/null 2>&1)
+            if echo "$SUDO_CHECK" | grep -q "not in the sudoers"; then
+                echo "%$HOSTNAME: [SKIP] No sudo access"
+                echo "SKIP_REASON=NO_SUDO_ACCESS"
+                exit 0
+            fi
+
             echo "NVIDIA GPU found, will install driver"
             echo "SKIP_REASON=none"
 
@@ -126,20 +134,34 @@ steps:
           path: skipReason
           value: "${result}"
 
+  # --- Stage 1: Add PPA (2-step pattern) ---
   - states: ["10", "11"]
-    note: Wait for apt lock and add PPA
+    note: Check if should add PPA
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            SKIP='${json.skipReason}'
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+                echo "SKIPPED"
+            else
+                echo "PROCEED"
+            fi
+
+  - states: ["11", "12"]
+    note: Wait for apt lock and add PPA (only if PROCEED)
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            HOSTNAME=$(hostname -s)
-            SKIP='${json.skipReason}'
-
-            # Skip if any skip reason was set
-            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+            PREV='${result}'
+            if [ "$PREV" = "SKIPPED" ]; then
                 exit 0
             fi
+
+            HOSTNAME=$(hostname -s)
 
             # Wait for apt lock (max 5 min)
             TIMEOUT=300
@@ -157,20 +179,34 @@ steps:
 
             add-apt-repository ppa:graphics-drivers/ppa -y && apt update
 
-  - states: ["11", "12"]
-    note: Install NVIDIA driver
+  # --- Stage 2: Install driver (2-step pattern) ---
+  - states: ["12", "13"]
+    note: Check if should install driver
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            SKIP='${json.skipReason}'
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+                echo "SKIPPED"
+            else
+                echo "PROCEED"
+            fi
+
+  - states: ["13", "14"]
+    note: Install NVIDIA driver (only if PROCEED)
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            HOSTNAME=$(hostname -s)
-            SKIP='${json.skipReason}'
-
-            # Skip if any skip reason was set
-            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+            PREV='${result}'
+            if [ "$PREV" = "SKIPPED" ]; then
                 exit 0
             fi
+
+            HOSTNAME=$(hostname -s)
 
             # Wait for apt lock (max 5 min)
             TIMEOUT=300
@@ -178,6 +214,7 @@ steps:
             while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
                 if [ $ELAPSED -ge $TIMEOUT ]; then
                     echo "TIMEOUT waiting for apt lock"
+                    echo "%$HOSTNAME: [FAIL] apt lock timeout"
                     exit 1
                 fi
                 echo "Waiting for apt lock... (${ELAPSED}s)"
@@ -187,7 +224,8 @@ steps:
 
             apt install -y nvidia-driver-535
 
-  - states: ["12", "end"]
+  # --- Verification ---
+  - states: ["14", "end"]
     note: Verification
     actions:
       - actor: this

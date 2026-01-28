@@ -23,13 +23,22 @@ steps:
 
             if [ -n "$HUNG_PIDS" ]; then
                 # APT_HUNG message is already output by NVIDIA workflow, so skip silently
-                echo "APT_HUNG: yes (skipping ROCm installation)"
+                echo "SKIP_REASON=APT_HUNG"
                 exit 0
             fi
 
-            echo "APT_HUNG: no"
+            echo "SKIP_REASON=none"
 
   - states: ["1", "2"]
+    note: Store skip reason
+    actions:
+      - actor: this
+        method: putJson
+        arguments:
+          path: skipReason
+          value: "${result}"
+
+  - states: ["2", "3"]
     note: Check if rocm-smi is already installed
     actions:
       - actor: this
@@ -37,29 +46,76 @@ steps:
         arguments:
           - |
             HOSTNAME=$(hostname -s)
+            SKIP='${json.skipReason}'
+
+            # Skip if apt hung was detected
+            if echo "$SKIP" | grep -q "APT_HUNG"; then
+                echo "SKIP_REASON=APT_HUNG"
+                exit 0
+            fi
 
             if command -v rocm-smi &> /dev/null; then
                 VERSION=$(cat /opt/rocm/.info/version 2>/dev/null || echo "unknown")
                 echo "%$HOSTNAME: [OK] rocm-smi already installed (ROCm $VERSION)"
+                echo "SKIP_REASON=ALREADY_INSTALLED"
                 exit 0
             fi
 
-            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then
+            # Check for AMD GPU (Radeon or AMD/ATI in lspci output)
+            if ! lspci | grep -qiE "(radeon|amd/ati)"; then
                 echo "%$HOSTNAME: [SKIP] No AMD GPU"
+                echo "SKIP_REASON=NO_GPU"
+                exit 0
+            fi
+
+            # Check if user has sudo access by actually trying sudo
+            SUDO_CHECK=$(timeout 1 sudo -S true < /dev/null 2>&1)
+            if echo "$SUDO_CHECK" | grep -q "not in the sudoers"; then
+                echo "%$HOSTNAME: [SKIP] No sudo access"
+                echo "SKIP_REASON=NO_SUDO_ACCESS"
                 exit 0
             fi
 
             echo "AMD GPU found, will install ROCm"
+            echo "SKIP_REASON=none"
 
-  - states: ["2", "3"]
-    note: Install prerequisites
+  - states: ["3", "4"]
+    note: Update skip reason
+    actions:
+      - actor: this
+        method: putJson
+        arguments:
+          path: skipReason
+          value: "${result}"
+
+  # --- Stage 1: Install prerequisites (2-step pattern) ---
+  - states: ["4", "5"]
+    note: Check if should install prerequisites
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            SKIP='${json.skipReason}'
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+                echo "SKIPPED"
+            else
+                echo "PROCEED"
+            fi
+
+  - states: ["5", "6"]
+    note: Install prerequisites (only if PROCEED)
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            if command -v rocm-smi &> /dev/null; then exit 0; fi
-            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then exit 0; fi
+            PREV='${result}'
+            if [ "$PREV" = "SKIPPED" ]; then
+                exit 0
+            fi
+
+            HOSTNAME=$(hostname -s)
 
             # Wait for apt lock (max 5 min)
             TIMEOUT=300
@@ -67,6 +123,7 @@ steps:
             while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
                 if [ $ELAPSED -ge $TIMEOUT ]; then
                     echo "TIMEOUT waiting for apt lock"
+                    echo "%$HOSTNAME: [FAIL] apt lock timeout"
                     exit 1
                 fi
                 echo "Waiting for apt lock... (${ELAPSED}s)"
@@ -76,33 +133,64 @@ steps:
 
             apt install -y wget gnupg2
 
-  - states: ["3", "4"]
+  # --- Stage 2: Download amdgpu-install (no sudo needed) ---
+  - states: ["6", "7"]
     note: Download amdgpu-install package
     actions:
       - actor: this
         method: executeCommand
         arguments:
           - |
-            if command -v rocm-smi &> /dev/null; then exit 0; fi
-            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then exit 0; fi
+            SKIP='${json.skipReason}'
+
+            # Skip if any skip reason was set
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+                exit 0
+            fi
 
             cd /tmp
             . /etc/os-release
             UBUNTU_CODENAME=${VERSION_CODENAME:-jammy}
-            ROCM_VERSION="6.0"
-            wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/${UBUNTU_CODENAME}/amdgpu-install_6.0.60000-1_all.deb -O amdgpu-install.deb || \
-            wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/jammy/amdgpu-install_6.0.60000-1_all.deb -O amdgpu-install.deb
+            ROCM_VERSION="7.2"
+
+            # Try noble first, then jammy as fallback
+            if [ "$UBUNTU_CODENAME" = "noble" ]; then
+                wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/noble/amdgpu-install_7.2.70200-1_all.deb -O amdgpu-install.deb || \
+                wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/jammy/amdgpu-install_7.2.70200-1_all.deb -O amdgpu-install.deb
+            else
+                wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/${UBUNTU_CODENAME}/amdgpu-install_7.2.70200-1_all.deb -O amdgpu-install.deb || \
+                wget -q https://repo.radeon.com/amdgpu-install/${ROCM_VERSION}/ubuntu/jammy/amdgpu-install_7.2.70200-1_all.deb -O amdgpu-install.deb
+            fi
             echo "Download complete"
 
-  - states: ["4", "5"]
-    note: Install amdgpu-install and ROCm
+  # --- Stage 3: Install ROCm (2-step pattern) ---
+  - states: ["7", "8"]
+    note: Check if should install ROCm
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            SKIP='${json.skipReason}'
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+                echo "SKIPPED"
+            else
+                echo "PROCEED"
+            fi
+
+  - states: ["8", "9"]
+    note: Install amdgpu-install and ROCm (only if PROCEED)
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            if command -v rocm-smi &> /dev/null; then exit 0; fi
-            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then exit 0; fi
+            PREV='${result}'
+            if [ "$PREV" = "SKIPPED" ]; then
+                exit 0
+            fi
+
+            HOSTNAME=$(hostname -s)
 
             # Wait for apt lock (max 5 min)
             TIMEOUT=300
@@ -110,6 +198,7 @@ steps:
             while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
                 if [ $ELAPSED -ge $TIMEOUT ]; then
                     echo "TIMEOUT waiting for apt lock"
+                    echo "%$HOSTNAME: [FAIL] apt lock timeout"
                     exit 1
                 fi
                 echo "Waiting for apt lock... (${ELAPSED}s)"
@@ -118,20 +207,40 @@ steps:
             done
 
             dpkg -i /tmp/amdgpu-install.deb && apt update
-            amdgpu-install -y --usecase=rocm --no-dkms
+            # ROCm 6.4.2+ uses apt install rocm instead of amdgpu-install --usecase
+            apt install -y rocm
 
-  - states: ["5", "6"]
-    note: Add user to render and video groups
+  # --- Stage 4: Add user to groups (2-step pattern) ---
+  - states: ["9", "10"]
+    note: Check if should add user to groups
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            SKIP='${json.skipReason}'
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+                echo "SKIPPED"
+            else
+                echo "PROCEED"
+            fi
+
+  - states: ["10", "11"]
+    note: Add user to render and video groups (only if PROCEED)
     actions:
       - actor: this
         method: executeSudoCommand
         arguments:
           - |
-            if command -v rocm-smi &> /dev/null; then exit 0; fi
-            if ! lspci | grep -qiE "amd.*(vga|display|3d)"; then exit 0; fi
+            PREV='${result}'
+            if [ "$PREV" = "SKIPPED" ]; then
+                exit 0
+            fi
+
             usermod -aG render,video devteam
 
-  - states: ["6", "end"]
+  # --- Verification ---
+  - states: ["11", "end"]
     note: Verification
     actions:
       - actor: this
@@ -139,12 +248,18 @@ steps:
         arguments:
           - |
             HOSTNAME=$(hostname -s)
+            SKIP='${json.skipReason}'
+
+            # Skip verification if skipped earlier
+            if ! echo "$SKIP" | grep -q "SKIP_REASON=none"; then
+                exit 0
+            fi
 
             if command -v rocm-smi &> /dev/null; then
                 VERSION=$(cat /opt/rocm/.info/version 2>/dev/null || echo "unknown")
                 echo "%$HOSTNAME: [INSTALLED] ROCm $VERSION"
             else
-                if lspci | grep -qiE "amd.*(vga|display|3d)"; then
+                if lspci | grep -qiE "(radeon|amd/ati)"; then
                     echo "%$HOSTNAME: [PENDING] ROCm reboot required"
                 fi
             fi

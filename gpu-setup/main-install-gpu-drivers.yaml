@@ -34,6 +34,13 @@ steps:
           method: runWorkflow
           arguments: ["gpu-setup/install-nvidia-driver.yaml"]
 
+  - states: ["2", "3"]
+    note: Fallback - NVIDIA workflow completed with errors
+    actions:
+      - actor: workflowReporter
+        method: addMessage
+        arguments: ["NVIDIA driver installation completed (some nodes may have errors)"]
+
   - states: ["3", "4"]
     note: Install ROCm (idempotent)
     actions:
@@ -43,6 +50,13 @@ steps:
           actor: "node-*"
           method: runWorkflow
           arguments: ["gpu-setup/install-rocm.yaml"]
+
+  - states: ["3", "4"]
+    note: Fallback - ROCm workflow completed with errors
+    actions:
+      - actor: workflowReporter
+        method: addMessage
+        arguments: ["ROCm installation completed (some nodes may have errors)"]
 
   - states: ["4", "end"]
     note: Generate report

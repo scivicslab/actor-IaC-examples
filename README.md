@@ -9,36 +9,51 @@ Example workflows for actor-IaC infrastructure automation.
 
 This repository contains example workflows demonstrating actor-IaC capabilities for infrastructure management and system information collection.
 
-## Installation
 
-### Prerequisites
+## Quick Start (No Cluster Required)
 
-First, install POJO-actor and actor-IaC to your local Maven repository:
+You can try actor-IaC on your local machine without any cluster setup.
+
+### 1. Install Dependencies
 
 ```bash
 # Install POJO-actor
 git clone https://github.com/scivicslab/POJO-actor
 cd POJO-actor
-git checkout v2.12.1
 mvn install
 
 # Install actor-IaC
 cd ..
 git clone https://github.com/scivicslab/actor-IaC
 cd actor-IaC
-git checkout v2.12.1
 mvn install
 ```
 
-**Note:** Do not use `mvn clean install`. Use `mvn install` only. The `clean` target may cause issues due to the Maven repository configuration in pom.xml.
-
-### Clone Examples
+### 2. Clone Examples and Run
 
 ```bash
 git clone https://github.com/scivicslab/actor-IaC-examples
 cd actor-IaC-examples
-git checkout v2.12.1
+
+# Run hello world example on localhost
+./actor_iac.java run -d ./hello -w main-hello -i localhost.ini -g all
 ```
+
+**Expected Output:**
+```
+[node-localhost] Hello from actor-IaC!
+
+Workflow completed successfully
+```
+
+### 3. Collect System Info (Localhost)
+
+```bash
+./actor_iac.java run -d ./sysinfo -w main-collect-sysinfo -i localhost.ini -g all
+```
+
+This collects system information (hostname, CPU, memory, disk, network) from your local machine.
+
 
 ## Examples
 
@@ -60,23 +75,55 @@ System information collection workflows:
 - **main-collect-microk8s-info.yaml** - Collect MicroK8s cluster information
 
 ```bash
-# Collect system info from compute nodes
+# Collect system info from localhost
+./actor_iac.java run -d ./sysinfo -w main-collect-sysinfo -i localhost.ini -g all
+
+# Collect system info from compute nodes (requires cluster)
 ./actor_iac.java run -d ./sysinfo -w main-collect-sysinfo -i inventory.ini -g compute
 
 # Collect and analyze with plugin
 ./actor_iac.java run -d ./sysinfo -w main-collect-and-analyze -i inventory.ini -g compute
 ```
 
+### prereqs/
+
+Prerequisite verification workflow:
+
+```bash
+./actor_iac.java run -d ./prereqs -w main-verify-prereqs -i localhost.ini -g all
+```
+
+
 ## Inventory Files
 
-- **inventory.ini** - Example inventory with compute nodes
-- **localhost.ini** - Local-only inventory for testing
+- **localhost.ini** - Local-only inventory for testing (no SSH required)
+- **inventory.ini** - Example inventory with compute nodes (SSH access required)
+
+### Creating Your Own Inventory
+
+For cluster usage, create an inventory file with your nodes:
+
+```ini
+[compute]
+node1 ansible_host=192.168.1.101
+node2 ansible_host=192.168.1.102
+node3 ansible_host=192.168.1.103
+```
+
 
 ## Plugins
 
 The `plugins/` directory contains JAR files for workflow extensions:
 
-- **actor-IaC-plugins-1.0.0.jar** - H2 database analyzer plugin for system info aggregation
+- **log-analyzer-plugin-1.0.0.jar** - H2 database analyzer plugin for system info aggregation
+
+
+## References
+
+- [actor-IaC Documentation](https://scivicslab.com/docs/actor-iac/introduction)
+- [actor-IaC GitHub](https://github.com/scivicslab/actor-IaC)
+- [POJO-actor Tutorial](https://scivicslab.com/blog/2025-12-30-TutorialPart2-1)
+
 
 ## License
 

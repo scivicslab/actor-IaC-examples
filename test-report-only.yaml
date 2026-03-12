@@ -1,0 +1,15 @@
+name: test-report-only
+
+steps:
+  - states: ["0", "1"]
+    note: Load WorkflowReporter
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
+
+  - states: ["1", "end"]
+    note: Generate report
+    actions:
+      - actor: workflowReporter
+        method: report

@@ -1,0 +1,38 @@
+name: main-check-kubectl
+
+description: |
+  Main workflow to check kubectl installation on all nodes.
+  Generates a summary report at the end.
+
+steps:
+  - states: ["0", "1"]
+    note: Load WorkflowReporter and add workflow info
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
+      - actor: workflowReporter
+        method: addWorkflowInfo
+        arguments: ["main-check-kubectl.yaml"]
+
+  - states: ["1", "2"]
+    note: Execute check-kubectl.yaml on all nodes
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: runWorkflow
+          arguments: ["check-kubectl.yaml"]
+
+  - states: ["2", "end"]
+    note: Generate report
+    actions:
+      - actor: workflowReporter
+        method: report
+
+  - states: ["!end", "end"]
+    note: Generate report on error
+    actions:
+      - actor: workflowReporter
+        method: report

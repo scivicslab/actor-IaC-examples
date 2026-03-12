@@ -1,0 +1,62 @@
+name: check-kubectl
+
+description: |
+  Check if kubectl is installed and can connect to a Kubernetes cluster.
+  Outputs summary lines with % prefix for WorkflowReporter.
+
+steps:
+  - states: ["0", "1"]
+    note: Check if kubectl command is available
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+            echo "%--------------------"
+            echo "%Host: $HOSTNAME"
+            if command -v kubectl > /dev/null 2>&1; then
+              VERSION=$(kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null | head -1)
+              echo "[OK] kubectl found: $VERSION"
+              echo "%kubectl: OK ($VERSION)"
+            else
+              echo "[ERROR] kubectl: not found"
+              echo "  Install: https://kubernetes.io/docs/tasks/tools/"
+              echo "%kubectl: NOT FOUND"
+              exit 1
+            fi
+
+  - states: ["1", "end"]
+    note: Check cluster connectivity
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "Checking cluster connectivity..."
+            if kubectl cluster-info > /dev/null 2>&1; then
+              CLUSTER=$(kubectl cluster-info 2>/dev/null | head -1 | sed 's/.*running at //')
+              echo "[OK] Connected to cluster:"
+              kubectl cluster-info 2>/dev/null | head -2
+              echo ""
+              echo "Nodes:"
+              kubectl get nodes 2>/dev/null || echo "  (cannot list nodes)"
+              echo "%Cluster: OK ($CLUSTER)"
+            else
+              CONTEXT=$(kubectl config current-context 2>/dev/null || echo 'none')
+              echo "[WARN] kubectl is installed but cannot connect to a cluster"
+              echo "  Current context: $CONTEXT"
+              echo "  Available contexts:"
+              kubectl config get-contexts 2>/dev/null | head -5 || echo "  (no contexts configured)"
+              echo "%Cluster: NOT CONNECTED (context: $CONTEXT)"
+            fi
+
+  - states: ["!end", "end"]
+    note: Output error status on failure (must not fail)
+    actions:
+      - actor: this
+        method: executeCommand
+        arguments:
+          - |
+            echo "%Status: FAILED"
+            exit 0

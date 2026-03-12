@@ -1,0 +1,35 @@
+name: test-workflow-info
+
+description: |
+  Test workflow for verifying addWorkflowInfo functionality.
+  This workflow tests the automatic extraction of workflow metadata.
+
+steps:
+  - states: ["0", "1"]
+    note: Load WorkflowReporter
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
+
+  - states: ["1", "2"]
+    note: Add workflow info to report
+    actions:
+      - actor: workflowReporter
+        method: addWorkflowInfo
+
+  - states: ["2", "3"]
+    note: Run a simple command
+    actions:
+      - actor: nodeGroup
+        method: apply
+        arguments:
+          actor: "node-*"
+          method: executeCommand
+          arguments: ["echo '%test: [OK] Test passed'"]
+
+  - states: ["3", "end"]
+    note: Generate report
+    actions:
+      - actor: workflowReporter
+        method: report

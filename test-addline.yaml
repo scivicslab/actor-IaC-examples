@@ -1,0 +1,22 @@
+name: test-addline
+
+steps:
+  - states: ["0", "1"]
+    note: Load WorkflowReporter
+    actions:
+      - actor: loader
+        method: createChild
+        arguments: ["ROOT", "workflowReporter", "com.scivicslab.actoriac.WorkflowReporter"]
+
+  - states: ["1", "2"]
+    note: Test addLine
+    actions:
+      - actor: workflowReporter
+        method: addLine
+        arguments: "Test line 1"
+
+  - states: ["2", "end"]
+    note: Generate report
+    actions:
+      - actor: workflowReporter
+        method: report
